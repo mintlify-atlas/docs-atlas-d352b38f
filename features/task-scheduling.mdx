@@ -1,0 +1,598 @@
+---
+title: Task Scheduling
+description: Cron-based task scheduling and command execution for automated workflows
+---
+
+Arkitec includes a powerful task scheduling system built on [node-cron](https://github.com/node-cron/node-cron) that allows you to run commands on a recurring schedule. This is the backbone of Arkitec's project automation system.
+
+## How Task Scheduling Works
+
+Every Arkitec project can define a scheduled task in its `ark.config.json`. The task scheduling system:
+
+1. **Parses cron schedules** - Validates cron expressions for correctness
+2. **Schedules tasks** - Creates cron jobs with unique IDs
+3. **Executes commands** - Runs commands in the project directory
+4. **Captures output** - Logs stdout and stderr to files
+5. **Handles errors** - Gracefully handles command failures
+
+## Cron Syntax
+
+Arkitec uses standard 5-field cron syntax:
+
+```
+┌────────────── minute (0 - 59)
+│ ┌──────────── hour (0 - 23)
+│ │ ┌────────── day of month (1 - 31)
+│ │ │ ┌──────── month (1 - 12)
+│ │ │ │ ┌────── day of week (0 - 6) (Sunday = 0)
+│ │ │ │ │
+│ │ │ │ │
+* * * * *
+```
+
+### Common Schedules
+
+<Accordion title="Every 15 minutes">
+  ```json
+  {
+    "period": "*/15 * * * *"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Every hour at :30">
+  ```json
+  {
+    "period": "30 * * * *"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Every 2 hours">
+  ```json
+  {
+    "period": "0 */2 * * *"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Daily at 9:00 AM">
+  ```json
+  {
+    "period": "0 9 * * *"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Every Monday at 2:00 PM">
+  ```json
+  {
+    "period": "0 14 * * 1"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Every weekday at 6:00 PM">
+  ```json
+  {
+    "period": "0 18 * * 1-5"
+  }
+  ```
+</Accordion>
+
+<Tip>
+  Use [crontab.guru](https://crontab.guru/) to build and validate cron expressions interactively.
+</Tip>
+
+## Scheduling Tasks
+
+Tasks are scheduled using the CronService:
+
+```typescript
+const result = await cronService.schedule({
+  id: 'my-task',
+  schedule: '*/15 * * * *',  // Every 15 minutes
+  task: async () => {
+    // Your task logic here
+    console.log('Task executed!');
+  }
+});
+
+if (result.success) {
+  console.log('Task scheduled:', result.data.id);
+  console.log('Schedule:', result.data.schedule);
+  console.log('Running:', result.data.isRunning);
+}
+```
+
+<Warning>
+  Tasks are scheduled in a **stopped** state by default. You must explicitly call `start()` to begin execution.
+</Warning>
+
+### Starting Tasks
+
+After scheduling, start the task:
+
+```typescript
+const result = cronService.start('my-task');
+
+if (result.success) {
+  console.log('Task started and will run on schedule');
+}
+```
+
+### Running Tasks Immediately
+
+Execute a task right now (in addition to scheduled runs):
+
+```typescript
+const result = cronService.runNow('my-task');
+
+if (result.success) {
+  console.log('Task triggered immediately');
+}
+```
+
+### Stopping Tasks
+
+Stop a running task:
+
+```typescript
+const result = cronService.stop('my-task');
+
+if (result.success) {
+  console.log('Task stopped (will not run on schedule)');
+}
+```
+
+### Removing Tasks
+
+Completely remove a task:
+
+```typescript
+const result = cronService.remove('my-task');
+
+if (result.success) {
+  console.log('Task stopped and removed from registry');
+}
+```
+
+## Task States
+
+A scheduled task can be in one of two states:
+
+<Accordion title="scheduled (running)">
+  The task is active and will execute according to its cron schedule.
+  
+  ```typescript
+  const task = cronService.getTask('my-task');
+  console.log(task.data.isRunning);  // true
+  ```
+</Accordion>
+
+<Accordion title="stopped">
+  The task exists but will not execute on schedule. It can be started later.
+  
+  ```typescript
+  const task = cronService.getTask('my-task');
+  console.log(task.data.isRunning);  // false
+  ```
+</Accordion>
+
+## Command Execution
+
+Arkitec uses the **ExecutorService** to run commands as child processes:
+
+```typescript
+const result = await executor.run({
+  command: 'npm',
+  args: ['run', 'build'],
+  cwd: '/absolute/path/to/project',
+  logPath: '/absolute/path/to/log.txt'
+});
+
+if (result.success) {
+  console.log('Exit code:', result.data.exitCode);
+  console.log('Log file:', result.data.logFilePath);
+}
+```
+
+### How Commands are Executed
+
+<Steps>
+  <Step title="Spawn Process">
+    A child process is spawned with the specified command using Node's `child_process.spawn()`.
+  </Step>
+  
+  <Step title="Set Working Directory">
+    The process runs in the specified `cwd` (current working directory), typically the project directory.
+  </Step>
+  
+  <Step title="Capture Output">
+    Both stdout and stderr are captured in real-time.
+  </Step>
+  
+  <Step title="Strip ANSI Codes">
+    Color codes and terminal control characters are stripped for clean logs using [strip-ansi](https://github.com/chalk/strip-ansi).
+  </Step>
+  
+  <Step title="Write to Log File">
+    Output is written to the specified log file (if provided). The log directory is created automatically.
+  </Step>
+  
+  <Step title="Return Exit Code">
+    When the process completes, the exit code and log path are returned.
+  </Step>
+</Steps>
+
+### Log File Management
+
+Logs are appended to the file (not overwritten):
+
+```typescript
+const logStream = createWriteStream(logFilePath, { flags: 'a' });
+```
+
+This means:
+- Each execution adds to the log
+- You can track execution history
+- You need to manually rotate/clean logs if they grow large
+
+<Tip>
+  Consider implementing log rotation for frequently scheduled tasks to prevent log files from becoming too large.
+</Tip>
+
+## Project Task Configuration
+
+Projects configure scheduled tasks in `ark.config.json`:
+
+```json
+{
+  "command": ["npm", "run", "test"],
+  "period": "0 */2 * * *",
+  "logPath": ".arkitec/logs/test.log"
+}
+```
+
+### Configuration Fields
+
+<Accordion title="command (required)">
+  Array of strings representing the command to execute. The first element is the command, followed by arguments.
+  
+  ```json
+  "command": ["node", "scripts/sync.js", "--verbose"]
+  ```
+  
+  This is equivalent to running:
+  ```bash
+  node scripts/sync.js --verbose
+  ```
+</Accordion>
+
+<Accordion title="period (required)">
+  Cron expression defining when the task runs.
+  
+  ```json
+  "period": "*/30 * * * *"  // Every 30 minutes
+  ```
+  
+  The cron expression is validated before the task is scheduled. Invalid schedules will cause registration to fail.
+</Accordion>
+
+<Accordion title="logPath (optional)">
+  Relative path from the project directory where command output is written.
+  
+  ```json
+  "logPath": ".arkitec/logs/command.log"
+  ```
+  
+  If omitted, command output is not saved to a file.
+</Accordion>
+
+## Task IDs and Lifecycle
+
+When a project is registered, Arkitec generates a unique task ID:
+
+```typescript
+const taskId = `arkitec-${projectName}-${Date.now()}`;
+// Example: arkitec-backend-1705339200000
+```
+
+The task lifecycle:
+
+1. **Project registered** → Task scheduled (stopped)
+2. **`start()` called** → Task begins running on schedule
+3. **Config changed** → Old task removed, new task scheduled
+4. **Project unregistered** → Task stopped and removed
+5. **Workspace refreshed** → All tasks stopped and re-registered
+
+## Validation
+
+### Schedule Validation
+
+Before scheduling, cron expressions are validated:
+
+```typescript
+const isValid = cronService.validateSchedule('*/15 * * * *');
+
+if (!isValid) {
+  console.error('Invalid cron expression');
+}
+```
+
+Common validation errors:
+- Too few or too many fields (must be 5)
+- Invalid values (e.g., minute > 59)
+- Invalid range syntax (e.g., `10-5` is invalid)
+- Typos in special characters (`*`, `/`, `-`, `,`)
+
+<Warning>
+  Always validate cron expressions before using them in production. Invalid schedules will prevent project registration.
+</Warning>
+
+## Error Handling
+
+The task scheduling system handles errors gracefully:
+
+### Task Execution Errors
+
+If a task throws an error, it's caught and logged:
+
+```typescript
+const task = cron.schedule(schedule, async () => {
+  try {
+    await config.task();
+  } catch (error) {
+    console.error(`[CronService] Task ${id} failed:`, error.message);
+  }
+});
+```
+
+**The task continues to run on schedule** even if individual executions fail.
+
+### Command Execution Errors
+
+If a command fails to spawn:
+
+```typescript
+proc.on('error', (error) => {
+  resolve(r.fail(
+    ExecutorErrors.CommandExecutionError,
+    `Command execution failed: ${error.message}`
+  ));
+});
+```
+
+Non-zero exit codes are **not treated as errors**:
+
+```typescript
+proc.on('close', (code) => {
+  resolve(r.success({
+    exitCode: code,  // Could be non-zero
+    logFilePath
+  }));
+});
+```
+
+You can check the exit code and handle failures in your task logic.
+
+## Getting Task Information
+
+### Get Single Task
+
+```typescript
+const result = cronService.getTask('my-task');
+
+if (result.success) {
+  console.log('ID:', result.data.id);
+  console.log('Schedule:', result.data.schedule);
+  console.log('Is running:', result.data.isRunning);
+}
+```
+
+### Get All Tasks
+
+```typescript
+const tasks = cronService.getAllTasks();
+
+tasks.forEach(task => {
+  console.log(`${task.id}: ${task.isRunning ? 'running' : 'stopped'}`);
+});
+```
+
+## Replacing Tasks
+
+If you schedule a task with an ID that already exists, the old task is automatically replaced:
+
+```typescript
+// Schedule initial task
+await cronService.schedule({
+  id: 'my-task',
+  schedule: '*/15 * * * *',
+  task: async () => { /* ... */ }
+});
+
+// This replaces the previous task
+await cronService.schedule({
+  id: 'my-task',  // Same ID
+  schedule: '*/30 * * * *',  // New schedule
+  task: async () => { /* ... */ }
+});
+```
+
+The old task is stopped and removed before the new one is scheduled.
+
+## Best Practices
+
+1. **Test commands manually first** - Ensure commands work before scheduling
+2. **Use absolute paths in commands** - Avoid relying on environment variables
+3. **Configure log paths** - Always log output for debugging
+4. **Handle long-running commands** - Ensure commands complete before next scheduled run
+5. **Validate cron expressions** - Use `validateSchedule()` or crontab.guru
+6. **Monitor task status** - Periodically check `getTask()` for health monitoring
+7. **Clean up tasks** - Remove tasks when projects are deleted
+8. **Set reasonable schedules** - Very frequent tasks can impact performance
+
+## Examples
+
+### Sync Data Every Hour
+
+```json
+{
+  "command": ["node", "scripts/sync-data.js"],
+  "period": "0 * * * *",
+  "logPath": ".arkitec/logs/sync.log"
+}
+```
+
+### Run Tests Every Morning
+
+```json
+{
+  "command": ["npm", "test"],
+  "period": "0 9 * * *",
+  "logPath": ".arkitec/logs/tests.log"
+}
+```
+
+### Deploy to Staging Nightly
+
+```json
+{
+  "command": ["./deploy.sh", "staging"],
+  "period": "0 2 * * *",
+  "logPath": ".arkitec/logs/deploy.log"
+}
+```
+
+### Clean Up Temp Files Weekly
+
+```json
+{
+  "command": ["rm", "-rf", "tmp/*"],
+  "period": "0 3 * * 0",
+  "logPath": ".arkitec/logs/cleanup.log"
+}
+```
+
+## Troubleshooting
+
+### Task Not Running
+
+If your task isn't executing:
+
+1. **Check if it's started**: Use `getTask()` to verify `isRunning` is true
+2. **Validate the schedule**: Use `validateSchedule()` or crontab.guru
+3. **Check the logs**: Review the log file for error messages
+4. **Test the command**: Run the command manually in the project directory
+5. **Check timing**: Ensure the next scheduled time hasn't passed
+
+### Command Fails Silently
+
+If the command runs but fails:
+
+1. **Check exit codes**: Log the exit code to detect failures
+2. **Review log file**: Look for error messages in the log
+3. **Test with absolute paths**: Relative paths might not resolve correctly
+4. **Check permissions**: Ensure the command has necessary permissions
+5. **Verify working directory**: Ensure `cwd` is set to the project directory
+
+### Invalid Schedule Error
+
+```
+Invalid cron schedule: */90 * * * *
+```
+
+This means:
+- The cron expression is malformed
+- Values are out of range (e.g., minute can't be 90)
+- Syntax is incorrect (e.g., missing asterisks)
+
+Use [crontab.guru](https://crontab.guru/) to validate and fix the expression.
+
+## API Reference
+
+### CronService Methods
+
+<Accordion title="schedule(config)">
+  Schedule a new task or replace an existing one.
+  
+  ```typescript
+  const result = await cronService.schedule({
+    id: 'task-id',
+    schedule: '*/15 * * * *',
+    task: async () => { /* ... */ }
+  });
+  ```
+</Accordion>
+
+<Accordion title="start(taskId)">
+  Start a scheduled task.
+  
+  ```typescript
+  const result = cronService.start('task-id');
+  ```
+</Accordion>
+
+<Accordion title="stop(taskId)">
+  Stop a running task.
+  
+  ```typescript
+  const result = cronService.stop('task-id');
+  ```
+</Accordion>
+
+<Accordion title="runNow(taskId)">
+  Execute a task immediately.
+  
+  ```typescript
+  const result = cronService.runNow('task-id');
+  ```
+</Accordion>
+
+<Accordion title="remove(taskId)">
+  Stop and remove a task.
+  
+  ```typescript
+  const result = cronService.remove('task-id');
+  ```
+</Accordion>
+
+<Accordion title="getTask(taskId)">
+  Get information about a specific task.
+  
+  ```typescript
+  const result = cronService.getTask('task-id');
+  ```
+</Accordion>
+
+<Accordion title="getAllTasks()">
+  Get all scheduled tasks.
+  
+  ```typescript
+  const tasks = cronService.getAllTasks();
+  ```
+</Accordion>
+
+<Accordion title="validateSchedule(schedule)">
+  Validate a cron expression.
+  
+  ```typescript
+  const isValid = cronService.validateSchedule('*/15 * * * *');
+  ```
+</Accordion>
+
+### ExecutorService Methods
+
+<Accordion title="run(options)">
+  Execute a command as a child process.
+  
+  ```typescript
+  const result = await executor.run({
+    command: 'npm',
+    args: ['test'],
+    cwd: '/project/path',
+    logPath: '/project/path/logs/test.log'
+  });
+  ```
+</Accordion>

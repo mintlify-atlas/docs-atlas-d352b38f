@@ -1,0 +1,412 @@
+---
+title: "WorkspaceChangeEvent"
+description: "Event types for workspace filesystem and registry changes"
+---
+
+## Overview
+
+The `WorkspaceChangeEvent` type represents all events that occur in the Arkitec workspace. These events are published through the `ChangesService` and can be subscribed to for reactive updates.
+
+## Type Definition
+
+`WorkspaceChangeEvent` is a union type of five different event kinds:
+
+```typescript
+type WorkspaceChangeEvent =
+  | FilesystemChangedEvent
+  | WorkspaceRootChangedEvent
+  | RegistryUpdatedEvent
+  | AgentCardUpdatedEvent
+  | AgentSkillsSyncedEvent;
+```
+
+## Event Types
+
+### FilesystemChangedEvent
+
+Emitted when files or directories change in the workspace.
+
+```typescript
+interface FilesystemChangedEvent {
+  kind: "filesystem.changed";
+  type: FileChangeType;
+  path: string;
+  error?: string;
+  rootPath: string | null;
+  timestamp: number;
+}
+```
+
+<ResponseField name="kind" type="literal" required>
+  Always `"filesystem.changed"` for this event type.
+</ResponseField>
+
+<ResponseField name="type" type="FileChangeType" required>
+  The type of filesystem change that occurred.
+  
+  <Expandable title="FileChangeType Values">
+    - `"add"` - File was created
+    - `"addDir"` - Directory was created
+    - `"change"` - File was modified
+    - `"unlink"` - File was deleted
+    - `"unlinkDir"` - Directory was deleted
+    - `"error"` - An error occurred during watching
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="path" type="string" required>
+  Relative or absolute path to the changed file or directory.
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if `type` is `"error"`.
+</ResponseField>
+
+<ResponseField name="rootPath" type="string | null" required>
+  The workspace root path, or null if not set.
+</ResponseField>
+
+<ResponseField name="timestamp" type="number" required>
+  Unix timestamp (milliseconds) when the event occurred.
+</ResponseField>
+
+### WorkspaceRootChangedEvent
+
+Emitted when the workspace root directory is changed.
+
+```typescript
+interface WorkspaceRootChangedEvent {
+  kind: "workspace.root.changed";
+  previousRootPath: string | null;
+  nextRootPath: string;
+  timestamp: number;
+}
+```
+
+<ResponseField name="kind" type="literal" required>
+  Always `"workspace.root.changed"` for this event type.
+</ResponseField>
+
+<ResponseField name="previousRootPath" type="string | null" required>
+  The previous workspace root path, or null if this is the first root.
+</ResponseField>
+
+<ResponseField name="nextRootPath" type="string" required>
+  The new workspace root path.
+</ResponseField>
+
+<ResponseField name="timestamp" type="number" required>
+  Unix timestamp (milliseconds) when the change occurred.
+</ResponseField>
+
+### RegistryUpdatedEvent
+
+Emitted when the project registry is updated (projects added, removed, or rescheduled).
+
+```typescript
+interface RegistryUpdatedEvent {
+  kind: "registry.updated";
+  reason: RegistryChangeReason;
+  directory?: string;
+  projectCount: number;
+  timestamp: number;
+}
+```
+
+<ResponseField name="kind" type="literal" required>
+  Always `"registry.updated"` for this event type.
+</ResponseField>
+
+<ResponseField name="reason" type="RegistryChangeReason" required>
+  The reason for the registry update.
+  
+  <Expandable title="RegistryChangeReason Values">
+    - `"scan"` - Initial workspace scan completed
+    - `"register"` - New project was registered
+    - `"unregister"` - Project was unregistered
+    - `"reschedule"` - Project schedule was updated
+    - `"workspace.refresh"` - Entire workspace was refreshed
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="directory" type="string">
+  Optional path to the specific project directory that changed.
+  
+  Present for `"register"`, `"unregister"`, and `"reschedule"` reasons.
+</ResponseField>
+
+<ResponseField name="projectCount" type="number" required>
+  Total number of registered projects after this update.
+</ResponseField>
+
+<ResponseField name="timestamp" type="number" required>
+  Unix timestamp (milliseconds) when the update occurred.
+</ResponseField>
+
+### AgentCardUpdatedEvent
+
+Emitted when an agent's card file (`agent-card.json`) is updated.
+
+```typescript
+interface AgentCardUpdatedEvent {
+  kind: "agent.card.updated";
+  directory: string;
+  timestamp: number;
+}
+```
+
+<ResponseField name="kind" type="literal" required>
+  Always `"agent.card.updated"` for this event type.
+</ResponseField>
+
+<ResponseField name="directory" type="string" required>
+  Path to the agent's project directory.
+</ResponseField>
+
+<ResponseField name="timestamp" type="number" required>
+  Unix timestamp (milliseconds) when the card was updated.
+</ResponseField>
+
+### AgentSkillsSyncedEvent
+
+Emitted when an agent's skills have been synchronized.
+
+```typescript
+interface AgentSkillsSyncedEvent {
+  kind: "agent.skills.synced";
+  directory: string;
+  timestamp: number;
+}
+```
+
+<ResponseField name="kind" type="literal" required>
+  Always `"agent.skills.synced"` for this event type.
+</ResponseField>
+
+<ResponseField name="directory" type="string" required>
+  Path to the agent's project directory.
+</ResponseField>
+
+<ResponseField name="timestamp" type="number" required>
+  Unix timestamp (milliseconds) when the sync occurred.
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+```typescript Subscribing to Events
+import { ChangesService } from '@/main/services/changes/changes.service';
+import type { WorkspaceChangeEvent } from '@/main/services/changes/types';
+
+// Subscribe to all workspace events
+const unsubscribe = changesService.subscribe((event: WorkspaceChangeEvent) => {
+  console.log(`Event: ${event.kind}`, event);
+  
+  switch (event.kind) {
+    case 'filesystem.changed':
+      handleFileChange(event);
+      break;
+    case 'workspace.root.changed':
+      handleRootChange(event);
+      break;
+    case 'registry.updated':
+      handleRegistryUpdate(event);
+      break;
+    case 'agent.card.updated':
+      handleCardUpdate(event);
+      break;
+    case 'agent.skills.synced':
+      handleSkillsSync(event);
+      break;
+  }
+});
+
+// Later: unsubscribe
+unsubscribe();
+```
+
+```json FilesystemChangedEvent Example
+{
+  "kind": "filesystem.changed",
+  "type": "change",
+  "path": "/workspace/agents/code-reviewer/ark.config.json",
+  "rootPath": "/workspace",
+  "timestamp": 1678901234567
+}
+```
+
+```json WorkspaceRootChangedEvent Example
+{
+  "kind": "workspace.root.changed",
+  "previousRootPath": "/old/workspace",
+  "nextRootPath": "/new/workspace",
+  "timestamp": 1678901234567
+}
+```
+
+```json RegistryUpdatedEvent Example
+{
+  "kind": "registry.updated",
+  "reason": "register",
+  "directory": "/workspace/agents/new-agent",
+  "projectCount": 5,
+  "timestamp": 1678901234567
+}
+```
+
+```json AgentCardUpdatedEvent Example
+{
+  "kind": "agent.card.updated",
+  "directory": "/workspace/agents/code-reviewer",
+  "timestamp": 1678901234567
+}
+```
+
+```json AgentSkillsSyncedEvent Example
+{
+  "kind": "agent.skills.synced",
+  "directory": "/workspace/agents/code-reviewer",
+  "timestamp": 1678901234567
+}
+```
+</CodeGroup>
+
+## Event Flow
+
+Understanding the typical event sequence:
+
+### Initial Workspace Scan
+```
+1. workspace.root.changed (if root is set)
+2. registry.updated (reason: "scan")
+3. agent.card.updated (for each agent found)
+```
+
+### Adding a New Agent
+```
+1. filesystem.changed (type: "addDir") - Directory created
+2. filesystem.changed (type: "add") - ark.config.json added
+3. filesystem.changed (type: "add") - agent-card.json added
+4. registry.updated (reason: "register")
+5. agent.card.updated
+```
+
+### Modifying Agent Configuration
+```
+1. filesystem.changed (type: "change") - ark.config.json modified
+2. registry.updated (reason: "reschedule")
+```
+
+### Updating Agent Card
+```
+1. filesystem.changed (type: "change") - agent-card.json modified
+2. agent.card.updated
+```
+
+### Removing an Agent
+```
+1. filesystem.changed (type: "unlink") - ark.config.json deleted
+2. registry.updated (reason: "unregister")
+```
+
+## Usage Patterns
+
+### Filtering Events by Type
+
+```typescript
+// Only handle registry updates
+const unsubscribe = changesService.subscribe((event) => {
+  if (event.kind === 'registry.updated') {
+    console.log(`Registry updated: ${event.reason}`);
+    console.log(`Projects: ${event.projectCount}`);
+  }
+});
+```
+
+### Debouncing Config Changes
+
+```typescript
+let debounceTimer: NodeJS.Timeout | null = null;
+
+const unsubscribe = changesService.subscribe((event) => {
+  if (event.kind === 'filesystem.changed' && 
+      event.path.endsWith('ark.config.json')) {
+    
+    if (debounceTimer) clearTimeout(debounceTimer);
+    
+    debounceTimer = setTimeout(() => {
+      handleConfigUpdate(event.path);
+    }, 200);
+  }
+});
+```
+
+### Tracking Agent Lifecycle
+
+```typescript
+const agentLifecycle = new Map<string, 'active' | 'removed'>();
+
+changesService.subscribe((event) => {
+  if (event.kind === 'registry.updated' && event.directory) {
+    if (event.reason === 'register') {
+      agentLifecycle.set(event.directory, 'active');
+      console.log(`Agent registered: ${event.directory}`);
+    } else if (event.reason === 'unregister') {
+      agentLifecycle.set(event.directory, 'removed');
+      console.log(`Agent removed: ${event.directory}`);
+    }
+  }
+});
+```
+
+## Integration with InspectorService
+
+The `InspectorService` uses these events internally:
+
+```typescript
+class InspectorService {
+  setupChangeSubscriptions(): Result<void, RegistryError> {
+    this.unsubscribeFromChanges?.();
+    
+    this.unsubscribeFromChanges = this.changes.subscribe((event) => {
+      this.onWorkspaceEvent(event);
+    });
+    
+    return r.success(undefined);
+  }
+  
+  private onWorkspaceEvent(event: WorkspaceChangeEvent): void {
+    // Handle workspace root changes
+    if (event.kind === 'workspace.root.changed') {
+      this.refreshWorkspace();
+      return;
+    }
+    
+    // Handle agent card updates
+    if (event.kind === 'agent.card.updated') {
+      this.scheduleOrgRegeneration();
+      return;
+    }
+    
+    // Handle filesystem changes
+    if (event.kind === 'filesystem.changed') {
+      if (event.path.endsWith('ark.config.json')) {
+        this.handleConfigChange(event);
+      } else if (event.path.endsWith('agent-card.json')) {
+        this.scheduleOrgRegeneration();
+      }
+    }
+  }
+}
+```
+
+## Related Types
+
+- [ProjectConfig](/api/types/project-config) - Project data affected by registry updates
+- [AgentCard](/api/types/agent-card) - Agent card data affected by card updates
+- **ChangesService** - Service that publishes these events
+- **InspectorService** - Service that consumes these events
+
+## Source Code
+
+Defined in: `src/main/services/changes/types.ts:52`

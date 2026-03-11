@@ -1,0 +1,451 @@
+---
+title: Agent Management
+description: Create, configure, and manage AI agents with skills and capabilities
+---
+
+Arkitec provides a comprehensive agent management system that allows you to create AI agents, configure their capabilities, and manage their skills. Each agent is represented by an **Agent Card** that defines its identity, skills, and supported interfaces.
+
+## Agent Card Structure
+
+Every agent in Arkitec is defined by an `agent-card.json` file that describes the agent's capabilities:
+
+```json
+{
+  "name": "Code Assistant",
+  "description": "An AI agent specialized in code review and refactoring",
+  "version": "1.0.0",
+  "email": "code-assistant@arkitec.dev",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": true,
+    "extendedAgentCard": false
+  },
+  "defaultInputModes": ["text", "code"],
+  "defaultOutputModes": ["text", "code"],
+  "skills": [
+    {
+      "id": "code-review",
+      "name": "Code Review",
+      "description": "Analyzes code for potential issues",
+      "tags": ["code", "analysis"]
+    }
+  ],
+  "supportedInterfaces": [
+    {
+      "url": "http://localhost:3000/rpc",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "2.0"
+    }
+  ]
+}
+```
+
+## Creating Agents
+
+You can create new agents programmatically or through the Arkitec UI:
+
+<Steps>
+  <Step title="Choose Location">
+    Select a directory for your agent. Agents are typically stored in the `.agents` directory at your workspace root.
+  </Step>
+  
+  <Step title="Create Agent">
+    Use the agent service to create the agent with a name:
+    
+    ```typescript
+    const result = await agentService.createAgent(
+      '.agents/my-agent',
+      'My Agent'
+    );
+    
+    if (result.success) {
+      console.log('Agent created at:', result.data);
+    }
+    ```
+  </Step>
+  
+  <Step title="Configure Agent Card">
+    The system automatically generates a default agent card and initializes the agent's file structure, including the `.skills` directory.
+  </Step>
+  
+  <Step title="Add Skills">
+    Add skills to your agent to extend its capabilities (see [Skills Management](#skills-management)).
+  </Step>
+</Steps>
+
+<Warning>
+  Agents cannot be created inside the `.arkitec` folder. This directory is reserved for system files.
+</Warning>
+
+## Agent File Structure
+
+When you create an agent, Arkitec generates the following structure:
+
+```
+.agents/my-agent/
+├── agent-card.json       # Agent configuration and metadata
+├── .skills/              # Directory containing agent skills
+│   ├── skill-1/
+│   └── skill-2/
+└── .arkitec/
+    └── org.json          # Organization hierarchy (auto-generated)
+```
+
+## Skills Management
+
+Skills are modular capabilities that agents can use. Each skill is a directory containing specialized tools, prompts, or integrations.
+
+### Adding Skills
+
+Add a skill to an agent's card and install its files:
+
+```typescript
+const skill = {
+  id: 'code-review',
+  name: 'Code Review',
+  description: 'Analyzes code for potential issues',
+  tags: ['code', 'analysis']
+};
+
+const result = await agentService.addSkillToCard(
+  '.agents/my-agent',
+  skill
+);
+
+if (result.success) {
+  console.log('Updated card:', result.data);
+}
+```
+
+This performs two operations:
+1. Adds the skill to `agent-card.json`
+2. Installs skill files to `.agents/my-agent/.skills/code-review/`
+
+<Tip>
+  When you add a skill, Arkitec automatically publishes `agent.card.updated` and `agent.skills.synced` events to the change bus.
+</Tip>
+
+### Removing Skills
+
+Remove a skill from an agent:
+
+```typescript
+const result = await agentService.removeSkillFromCard(
+  '.agents/my-agent',
+  'code-review'
+);
+
+if (result.success) {
+  console.log('Skill removed, updated card:', result.data);
+}
+```
+
+This removes both the skill entry from the card and the skill files from disk.
+
+### Auto-Sync Skills
+
+Arkitec automatically syncs skills between the filesystem and the agent card:
+
+- **New skill folder detected**: Automatically added to the agent card
+- **Skill folder deleted**: Automatically removed from the agent card
+- **Card-only skills**: If a skill exists in the card but not on disk, it's removed during sync
+
+```typescript
+const result = await agentService.syncAgentSkills('.agents/my-agent');
+
+if (result.success) {
+  console.log('Synced skills:', result.data.skills);
+}
+```
+
+<Accordion title="How Auto-Sync Works">
+  The agent service subscribes to filesystem change events. When changes are detected in an agent's `.skills` directory, it:
+  
+  1. Debounces multiple rapid changes to avoid thrashing
+  2. Reads the skill directories from disk
+  3. Compares with skills in the agent card
+  4. Adds new skills or removes deleted ones
+  5. Publishes change events to update the UI
+</Accordion>
+
+## Updating Agent Cards
+
+You can update an agent's card programmatically:
+
+```typescript
+const updatedCard = {
+  ...existingCard,
+  description: 'Updated description',
+  capabilities: {
+    streaming: true,
+    pushNotifications: false,
+    extendedAgentCard: true
+  }
+};
+
+const result = await agentService.updateAgentCard(
+  '.agents/my-agent',
+  updatedCard
+);
+
+if (result.success) {
+  console.log('Agent card updated');
+}
+```
+
+<Warning>
+  Agent cards are validated using Zod schemas. If your card doesn't match the expected structure, the update will fail with a validation error.
+</Warning>
+
+## Reading Agent Cards
+
+Retrieve an agent's card:
+
+```typescript
+const result = await agentService.getAgentCard('.agents/my-agent');
+
+if (result.success) {
+  console.log('Agent name:', result.data.name);
+  console.log('Skills:', result.data.skills);
+}
+```
+
+## Change Events
+
+The agent service publishes events to the change bus:
+
+<Accordion title="agent.card.updated">
+  Published when an agent card is modified (create, update, add/remove skills).
+  
+  ```typescript
+  {
+    kind: 'agent.card.updated',
+    directory: '.agents/my-agent',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+<Accordion title="agent.skills.synced">
+  Published when skills are synchronized between disk and the agent card.
+  
+  ```typescript
+  {
+    kind: 'agent.skills.synced',
+    directory: '.agents/my-agent',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+## Database Caching
+
+Arkitec uses [lowdb](https://github.com/typicode/lowdb) to cache agent cards in memory for fast access:
+
+```typescript
+// Cards are cached by their absolute file path
+private dbCache = new Map<string, AgentCardDb>();
+
+// First access reads from disk and caches
+const db = await getCardDb('.agents/my-agent');
+
+// Subsequent accesses use the cache
+const db2 = await getCardDb('.agents/my-agent'); // Cached
+```
+
+The cache is invalidated when:
+- The agent directory is unregistered
+- The workspace root changes
+- The app restarts
+
+## Capabilities
+
+Agents can declare various capabilities in their card:
+
+<Accordion title="streaming">
+  Whether the agent supports streaming responses (useful for long-running operations or real-time output).
+  
+  ```json
+  "capabilities": {
+    "streaming": true
+  }
+  ```
+</Accordion>
+
+<Accordion title="pushNotifications">
+  Whether the agent can send push notifications to users (useful for background tasks or alerts).
+  
+  ```json
+  "capabilities": {
+    "pushNotifications": true
+  }
+  ```
+</Accordion>
+
+<Accordion title="extendedAgentCard">
+  Whether the agent supports extended card features beyond the standard schema.
+  
+  ```json
+  "capabilities": {
+    "extendedAgentCard": true
+  }
+  ```
+</Accordion>
+
+## Supported Interfaces
+
+Agents can expose multiple protocol interfaces:
+
+```json
+"supportedInterfaces": [
+  {
+    "url": "http://localhost:3000/rpc",
+    "protocolBinding": "JSONRPC",
+    "protocolVersion": "2.0"
+  },
+  {
+    "url": "http://localhost:3001/api",
+    "protocolBinding": "HTTP+JSON",
+    "protocolVersion": "1.0"
+  }
+]
+```
+
+Supported protocol bindings:
+- `JSONRPC` - JSON-RPC protocol
+- `GRPC` - gRPC protocol  
+- `HTTP+JSON` - REST-style HTTP with JSON payloads
+
+## Validation
+
+Agent cards are validated using Zod schemas:
+
+```typescript
+import { AgentCardSchema } from './schemas/agent-card';
+
+const parseResult = AgentCardSchema.safeParse(cardData);
+
+if (!parseResult.success) {
+  console.error('Validation errors:', parseResult.error);
+}
+```
+
+### Common Validation Errors
+
+<Accordion title="Missing required fields">
+  Ensure your card includes `name`, `description`, `version`, and all required arrays.
+  
+  ```json
+  {
+    "name": "Required",
+    "description": "Required",
+    "version": "1.0.0",
+    "defaultInputModes": [],
+    "defaultOutputModes": [],
+    "skills": [],
+    "supportedInterfaces": []
+  }
+  ```
+</Accordion>
+
+<Accordion title="Invalid URL format">
+  Interface URLs must be valid URLs (http:// or https://).
+  
+  ```json
+  // ❌ Invalid
+  "url": "localhost:3000"
+  
+  // ✅ Valid
+  "url": "http://localhost:3000"
+  ```
+</Accordion>
+
+<Accordion title="Invalid protocol binding">
+  Must be one of: `JSONRPC`, `GRPC`, or `HTTP+JSON`.
+  
+  ```json
+  // ❌ Invalid
+  "protocolBinding": "REST"
+  
+  // ✅ Valid
+  "protocolBinding": "HTTP+JSON"
+  ```
+</Accordion>
+
+## Best Practices
+
+1. **Use descriptive skill IDs**: Skill IDs should be kebab-case and descriptive (e.g., `code-review`, `data-analysis`)
+2. **Version your agents**: Update the `version` field when making breaking changes
+3. **Tag skills appropriately**: Use tags to categorize skills for easier discovery
+4. **Provide email contacts**: Include an email for agent ownership and support
+5. **Document capabilities**: Clearly describe what each agent can do in the description field
+
+## API Reference
+
+### AgentService Methods
+
+<Accordion title="createAgent(directory, name)">
+  Creates a new agent with the specified name at the given directory.
+  
+  ```typescript
+  const result = await agentService.createAgent(
+    '.agents/my-agent',
+    'My Agent'
+  );
+  ```
+  
+  Returns the directory path on success.
+</Accordion>
+
+<Accordion title="getAgentCard(directory)">
+  Retrieves and validates an agent's card.
+  
+  ```typescript
+  const result = await agentService.getAgentCard('.agents/my-agent');
+  
+  if (result.success) {
+    console.log(result.data.name);
+  }
+  ```
+</Accordion>
+
+<Accordion title="updateAgentCard(directory, card)">
+  Updates an agent's card with new data.
+  
+  ```typescript
+  const result = await agentService.updateAgentCard(
+    '.agents/my-agent',
+    updatedCard
+  );
+  ```
+</Accordion>
+
+<Accordion title="addSkillToCard(directory, skill)">
+  Adds a skill to an agent's card and installs skill files.
+  
+  ```typescript
+  const result = await agentService.addSkillToCard(
+    '.agents/my-agent',
+    { id: 'skill-id', name: 'Skill Name', ... }
+  );
+  ```
+</Accordion>
+
+<Accordion title="removeSkillFromCard(directory, skillId)">
+  Removes a skill from an agent's card and deletes skill files.
+  
+  ```typescript
+  const result = await agentService.removeSkillFromCard(
+    '.agents/my-agent',
+    'skill-id'
+  );
+  ```
+</Accordion>
+
+<Accordion title="syncAgentSkills(directory)">
+  Synchronizes skills between the filesystem and agent card.
+  
+  ```typescript
+  const result = await agentService.syncAgentSkills('.agents/my-agent');
+  ```
+</Accordion>

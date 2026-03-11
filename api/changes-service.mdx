@@ -1,0 +1,556 @@
+---
+title: ChangesService
+description: Service for publishing and subscribing to workspace change events
+---
+
+The `ChangesService` provides a lightweight event bus for publishing and subscribing to workspace change events. It enables decoupled communication between services without direct dependencies.
+
+## Injection
+
+The service is a singleton injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { ChangesService } from "@/main/services/changes/changes.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(ChangesService) private readonly changes: ChangesService
+  ) {}
+}
+```
+
+## Public Methods
+
+### subscribe
+
+Subscribes to workspace change events.
+
+<ParamField path="listener" type="WorkspaceChangeListener" required>
+  Callback function that receives change events
+</ParamField>
+
+<ResponseField name="return" type="() => void">
+  Unsubscribe function to remove the listener
+</ResponseField>
+
+**Behavior:**
+- Adds the listener to the active subscribers
+- Listener receives all events published after subscription
+- Returns an unsubscribe function for cleanup
+- Errors in listeners are caught and logged, but don't affect other listeners
+
+<CodeGroup>
+```typescript Example
+const unsubscribe = changesService.subscribe((event) => {
+  console.log(`Event: ${event.kind}`);
+  
+  if (event.kind === "filesystem.changed") {
+    console.log(`File changed: ${event.path}`);
+  }
+});
+
+// Later, cleanup
+unsubscribe();
+```
+
+```typescript Service Integration
+import { inject, injectable } from "tsyringe";
+import { ChangesService } from "@/main/services/changes/changes.service";
+import type { WorkspaceChangeEvent } from "@/main/services/changes/types";
+
+@injectable()
+export class FileWatcher {
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(
+    @inject(ChangesService) private readonly changes: ChangesService
+  ) {}
+
+  start() {
+    this.unsubscribe = this.changes.subscribe((event) => {
+      this.handleChange(event);
+    });
+  }
+
+  stop() {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  private handleChange(event: WorkspaceChangeEvent) {
+    switch (event.kind) {
+      case "filesystem.changed":
+        console.log(`File ${event.type}: ${event.path}`);
+        break;
+      case "agent.card.updated":
+        console.log(`Agent card updated: ${event.directory}`);
+        break;
+      // ... handle other event types
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### publish
+
+Publishes a change event to all subscribers.
+
+<ParamField path="event" type="WorkspaceChangeEvent" required>
+  The event to publish
+</ParamField>
+
+**Returns:** `void`
+
+**Behavior:**
+- Synchronously calls all registered listeners with the event
+- Errors in listeners are caught and logged
+- Publishing continues even if a listener throws an error
+
+<CodeGroup>
+```typescript Example
+changesService.publish({
+  kind: "filesystem.changed",
+  type: "add",
+  path: ".agents/support/skill.ts",
+  rootPath: "/home/user/projects",
+  timestamp: Date.now()
+});
+```
+
+```typescript Service Publishing
+import { inject, injectable } from "tsyringe";
+import { ChangesService } from "@/main/services/changes/changes.service";
+
+@injectable()
+export class AgentService {
+  constructor(
+    @inject(ChangesService) private readonly changes: ChangesService
+  ) {}
+
+  async updateAgentCard(directory: string, card: AgentCard) {
+    // ... update logic ...
+
+    // Notify subscribers
+    this.changes.publish({
+      kind: "agent.card.updated",
+      directory,
+      timestamp: Date.now()
+    });
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### getListenerCount
+
+Returns the number of active subscribers.
+
+<ResponseField name="return" type="number">
+  The number of registered listeners
+</ResponseField>
+
+**Usage:**
+- Useful for debugging
+- Can help detect listener leaks
+- Monitor event bus health
+
+<CodeGroup>
+```typescript Example
+const count = changesService.getListenerCount();
+console.log(`Active listeners: ${count}`);
+```
+
+```typescript Health Check
+function checkEventBusHealth() {
+  const listenerCount = changesService.getListenerCount();
+  
+  if (listenerCount === 0) {
+    console.warn("No listeners registered. Events will be lost.");
+  } else if (listenerCount > 50) {
+    console.warn(`High listener count (${listenerCount}). Possible memory leak?`);
+  } else {
+    console.log(`Event bus healthy: ${listenerCount} listeners`);
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Event Types
+
+The service handles the following event types:
+
+### FilesystemChangedEvent
+
+Published when files or directories change in the workspace.
+
+```typescript
+{
+  kind: "filesystem.changed",
+  type: "add" | "addDir" | "change" | "unlink" | "unlinkDir" | "error",
+  path: string,          // Relative path from workspace root
+  error?: string,        // Error message if type is "error"
+  rootPath: string | null,
+  timestamp: number
+}
+```
+
+<CodeGroup>
+```typescript Example
+changesService.subscribe((event) => {
+  if (event.kind === "filesystem.changed") {
+    console.log(`File ${event.type}: ${event.path}`);
+    
+    if (event.type === "error" && event.error) {
+      console.error(`FS Error: ${event.error}`);
+    }
+  }
+});
+```
+</CodeGroup>
+
+---
+
+### WorkspaceRootChangedEvent
+
+Published when the workspace root directory changes.
+
+```typescript
+{
+  kind: "workspace.root.changed",
+  previousRootPath: string | null,
+  nextRootPath: string,
+  timestamp: number
+}
+```
+
+<CodeGroup>
+```typescript Example
+changesService.subscribe((event) => {
+  if (event.kind === "workspace.root.changed") {
+    console.log(`Workspace changed:`);
+    console.log(`  From: ${event.previousRootPath || "(none)"}`);
+    console.log(`  To: ${event.nextRootPath}`);
+  }
+});
+```
+</CodeGroup>
+
+---
+
+### RegistryUpdatedEvent
+
+Published when the project registry changes.
+
+```typescript
+{
+  kind: "registry.updated",
+  reason: "scan" | "register" | "unregister" | "reschedule" | "workspace.refresh",
+  directory?: string,    // Affected project directory (if applicable)
+  projectCount: number,  // Total registered projects
+  timestamp: number
+}
+```
+
+<CodeGroup>
+```typescript Example
+changesService.subscribe((event) => {
+  if (event.kind === "registry.updated") {
+    console.log(`Registry ${event.reason}`);
+    console.log(`Total projects: ${event.projectCount}`);
+    
+    if (event.directory) {
+      console.log(`Affected: ${event.directory}`);
+    }
+  }
+});
+```
+</CodeGroup>
+
+---
+
+### AgentCardUpdatedEvent
+
+Published when an agent card is modified.
+
+```typescript
+{
+  kind: "agent.card.updated",
+  directory: string,
+  timestamp: number
+}
+```
+
+<CodeGroup>
+```typescript Example
+changesService.subscribe((event) => {
+  if (event.kind === "agent.card.updated") {
+    console.log(`Agent card updated: ${event.directory}`);
+  }
+});
+```
+</CodeGroup>
+
+---
+
+### AgentSkillsSyncedEvent
+
+Published when agent skills are synchronized with disk.
+
+```typescript
+{
+  kind: "agent.skills.synced",
+  directory: string,
+  timestamp: number
+}
+```
+
+<CodeGroup>
+```typescript Example
+changesService.subscribe((event) => {
+  if (event.kind === "agent.skills.synced") {
+    console.log(`Skills synced: ${event.directory}`);
+  }
+});
+```
+</CodeGroup>
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Event Bus Manager
+import { inject, injectable } from "tsyringe";
+import { ChangesService } from "@/main/services/changes/changes.service";
+import type { WorkspaceChangeEvent } from "@/main/services/changes/types";
+
+@injectable()
+export class EventBusManager {
+  private subscriptions: Array<() => void> = [];
+
+  constructor(
+    @inject(ChangesService) private readonly changes: ChangesService
+  ) {}
+
+  initialize() {
+    // Subscribe to all events
+    const unsubscribe = this.changes.subscribe((event) => {
+      this.routeEvent(event);
+    });
+    
+    this.subscriptions.push(unsubscribe);
+    console.log(`Subscribed to events. Active listeners: ${this.changes.getListenerCount()}`);
+  }
+
+  private routeEvent(event: WorkspaceChangeEvent) {
+    switch (event.kind) {
+      case "filesystem.changed":
+        this.handleFilesystemChange(event);
+        break;
+      case "workspace.root.changed":
+        this.handleWorkspaceRootChange(event);
+        break;
+      case "registry.updated":
+        this.handleRegistryUpdate(event);
+        break;
+      case "agent.card.updated":
+        this.handleAgentCardUpdate(event);
+        break;
+      case "agent.skills.synced":
+        this.handleAgentSkillsSync(event);
+        break;
+    }
+  }
+
+  private handleFilesystemChange(event: FilesystemChangedEvent) {
+    if (event.type === "error") {
+      console.error(`FS Error: ${event.error}`);
+      return;
+    }
+
+    console.log(`[FS] ${event.type}: ${event.path}`);
+  }
+
+  private handleWorkspaceRootChange(event: WorkspaceRootChangedEvent) {
+    console.log(`[Workspace] Root changed to: ${event.nextRootPath}`);
+  }
+
+  private handleRegistryUpdate(event: RegistryUpdatedEvent) {
+    console.log(`[Registry] ${event.reason}: ${event.projectCount} projects`);
+  }
+
+  private handleAgentCardUpdate(event: AgentCardUpdatedEvent) {
+    console.log(`[Agent] Card updated: ${event.directory}`);
+  }
+
+  private handleAgentSkillsSync(event: AgentSkillsSyncedEvent) {
+    console.log(`[Agent] Skills synced: ${event.directory}`);
+  }
+
+  cleanup() {
+    for (const unsubscribe of this.subscriptions) {
+      unsubscribe();
+    }
+    this.subscriptions = [];
+    console.log(`Unsubscribed. Remaining listeners: ${this.changes.getListenerCount()}`);
+  }
+}
+```
+
+```typescript Filtered Subscriber
+import { ChangesService } from "@/main/services/changes/changes.service";
+
+class AgentChangeWatcher {
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(private readonly changes: ChangesService) {}
+
+  watchAgent(directory: string, callback: () => void) {
+    this.unsubscribe = this.changes.subscribe((event) => {
+      // Only react to events for this specific agent
+      if (
+        (event.kind === "agent.card.updated" || event.kind === "agent.skills.synced") &&
+        event.directory === directory
+      ) {
+        callback();
+      }
+    });
+  }
+
+  stop() {
+    this.unsubscribe?.();
+  }
+}
+
+// Usage
+const watcher = new AgentChangeWatcher(changesService);
+watcher.watchAgent(".agents/support", () => {
+  console.log("Support agent was updated!");
+});
+```
+
+```typescript Debounced Handler
+import { ChangesService } from "@/main/services/changes/changes.service";
+
+class DebouncedFileWatcher {
+  private debounceTimer: NodeJS.Timeout | null = null;
+  private pendingChanges = new Set<string>();
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(
+    private readonly changes: ChangesService,
+    private readonly debounceMs: number = 500
+  ) {}
+
+  start(callback: (paths: string[]) => void) {
+    this.unsubscribe = this.changes.subscribe((event) => {
+      if (event.kind === "filesystem.changed" && event.type !== "error") {
+        this.pendingChanges.add(event.path);
+        
+        if (this.debounceTimer) {
+          clearTimeout(this.debounceTimer);
+        }
+        
+        this.debounceTimer = setTimeout(() => {
+          const paths = Array.from(this.pendingChanges);
+          this.pendingChanges.clear();
+          callback(paths);
+        }, this.debounceMs);
+      }
+    });
+  }
+
+  stop() {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.unsubscribe?.();
+  }
+}
+
+// Usage
+const watcher = new DebouncedFileWatcher(changesService, 1000);
+watcher.start((paths) => {
+  console.log(`${paths.length} files changed:`, paths);
+});
+```
+</CodeGroup>
+
+---
+
+## Best Practices
+
+### Always Unsubscribe
+
+Prevent memory leaks by unsubscribing when done:
+
+```typescript
+class MyService {
+  private unsubscribe: (() => void) | null = null;
+
+  start() {
+    this.unsubscribe = changesService.subscribe((event) => {
+      // handle event
+    });
+  }
+
+  stop() {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+}
+```
+
+### Handle Errors in Listeners
+
+Errors in your listener won't crash other listeners, but they should still be handled:
+
+```typescript
+changesService.subscribe((event) => {
+  try {
+    handleEvent(event);
+  } catch (error) {
+    console.error("Event handler error:", error);
+  }
+});
+```
+
+### Use Type Guards
+
+TypeScript can narrow event types:
+
+```typescript
+changesService.subscribe((event) => {
+  if (event.kind === "filesystem.changed") {
+    // TypeScript knows event.path exists
+    console.log(event.path);
+  }
+});
+```
+
+### Debounce Rapid Events
+
+Some events (like filesystem changes) can fire rapidly:
+
+```typescript
+let timer: NodeJS.Timeout | null = null;
+
+changesService.subscribe((event) => {
+  if (event.kind === "filesystem.changed") {
+    if (timer) clearTimeout(timer);
+    
+    timer = setTimeout(() => {
+      // Handle batched changes
+    }, 500);
+  }
+});
+```

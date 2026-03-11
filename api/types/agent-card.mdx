@@ -1,0 +1,218 @@
+---
+title: "AgentCard"
+description: "Agent card schema defining agent metadata, capabilities, and interfaces"
+---
+
+## Overview
+
+The `AgentCard` type defines the complete metadata and configuration for an Arkitec agent. It includes information about the agent's identity, capabilities, communication modes, skills, and supported interfaces.
+
+## Type Definition
+
+The `AgentCard` schema is defined using Zod validation in `src/main/services/agent/schemas/agent-card.ts`.
+
+```typescript
+interface AgentCard {
+  name: string;
+  description: string;
+  version: string;
+  email?: string;
+  capabilities: {
+    streaming?: boolean;
+    pushNotifications?: boolean;
+    extendedAgentCard?: boolean;
+  };
+  defaultInputModes: string[];
+  defaultOutputModes: string[];
+  skills: AgentSkill[];
+  supportedInterfaces: Array<{
+    url: string;
+    protocolBinding: "JSONRPC" | "GRPC" | "HTTP+JSON";
+    protocolVersion: string;
+  }>;
+}
+```
+
+## Fields
+
+### Basic Information
+
+<ResponseField name="name" type="string" required>
+  The display name of the agent.
+</ResponseField>
+
+<ResponseField name="description" type="string" required>
+  A detailed description of what the agent does and its purpose.
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  The semantic version of the agent (e.g., "1.0.0").
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Contact email for the agent or agent maintainer.
+</ResponseField>
+
+### Capabilities
+
+<ResponseField name="capabilities" type="object" required>
+  An object describing the agent's capabilities.
+  
+  <Expandable title="Capability Fields">
+    <ResponseField name="streaming" type="boolean">
+      Whether the agent supports streaming responses.
+    </ResponseField>
+    
+    <ResponseField name="pushNotifications" type="boolean">
+      Whether the agent can send push notifications.
+    </ResponseField>
+    
+    <ResponseField name="extendedAgentCard" type="boolean">
+      Whether the agent provides an extended agent card with additional metadata.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Communication Modes
+
+<ResponseField name="defaultInputModes" type="string[]" required>
+  Array of supported input modes (e.g., `["text", "voice", "image"]`).
+</ResponseField>
+
+<ResponseField name="defaultOutputModes" type="string[]" required>
+  Array of supported output modes (e.g., `["text", "json", "structured"]`).
+</ResponseField>
+
+### Skills
+
+<ResponseField name="skills" type="AgentSkill[]" required>
+  Array of skills that the agent can perform. See [AgentSkill](#agentskill) below.
+</ResponseField>
+
+### Supported Interfaces
+
+<ResponseField name="supportedInterfaces" type="array" required>
+  Array of communication interfaces the agent supports.
+  
+  <Expandable title="Interface Fields">
+    <ResponseField name="url" type="string" required>
+      Valid URL where the interface is accessible.
+    </ResponseField>
+    
+    <ResponseField name="protocolBinding" type="enum" required>
+      Communication protocol. One of: `"JSONRPC"`, `"GRPC"`, `"HTTP+JSON"`.
+    </ResponseField>
+    
+    <ResponseField name="protocolVersion" type="string" required>
+      Version of the protocol (e.g., "2.0", "1.0").
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## AgentSkill
+
+The `AgentSkill` type defines individual skills an agent can perform.
+
+```typescript
+interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+}
+```
+
+<ResponseField name="id" type="string" required>
+  Unique identifier for the skill.
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Display name of the skill.
+</ResponseField>
+
+<ResponseField name="description" type="string" required>
+  Detailed description of what the skill does.
+</ResponseField>
+
+<ResponseField name="tags" type="string[]" required>
+  Array of tags for categorizing and searching skills.
+</ResponseField>
+
+## Example
+
+<CodeGroup>
+```json agent-card.json
+{
+  "name": "Code Review Agent",
+  "description": "Performs automated code reviews and provides suggestions",
+  "version": "1.2.0",
+  "email": "code-review@example.com",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": true,
+    "extendedAgentCard": false
+  },
+  "defaultInputModes": ["text", "code"],
+  "defaultOutputModes": ["text", "json"],
+  "skills": [
+    {
+      "id": "syntax-check",
+      "name": "Syntax Checking",
+      "description": "Validates code syntax across multiple languages",
+      "tags": ["validation", "syntax", "linting"]
+    },
+    {
+      "id": "security-audit",
+      "name": "Security Auditing",
+      "description": "Identifies potential security vulnerabilities",
+      "tags": ["security", "audit", "vulnerabilities"]
+    }
+  ],
+  "supportedInterfaces": [
+    {
+      "url": "https://api.example.com/rpc",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "2.0"
+    },
+    {
+      "url": "https://api.example.com/grpc",
+      "protocolBinding": "GRPC",
+      "protocolVersion": "1.0"
+    }
+  ]
+}
+```
+</CodeGroup>
+
+## Validation Rules
+
+The `AgentCard` schema enforces the following validation rules:
+
+- **name**: Must be a non-empty string
+- **description**: Must be a non-empty string
+- **version**: Must be a non-empty string (semantic versioning recommended)
+- **email**: Optional, but must be a valid email format if provided
+- **capabilities**: All fields are optional booleans
+- **defaultInputModes**: Must be an array of strings (can be empty)
+- **defaultOutputModes**: Must be an array of strings (can be empty)
+- **skills**: Must be an array of valid `AgentSkill` objects
+- **supportedInterfaces**: Must be an array with valid URLs and protocol bindings
+
+## Usage in Arkitec
+
+The agent card is stored as `agent-card.json` in each agent's project directory. Arkitec uses this file to:
+
+1. **Discover agents** in the workspace during project scanning
+2. **Build the organization tree** showing agent hierarchies
+3. **Enable agent communication** through supported interfaces
+4. **Display agent information** in the UI and CLI
+5. **Validate agent capabilities** before routing tasks
+
+## Related Types
+
+- [ProjectConfig](/api/types/project-config) - Contains agent card reference in project configuration
+- [WorkspaceChangeEvent](/api/types/workspace-events) - Emits `agent.card.updated` events when cards change
+
+## Source Code
+
+Defined in: `src/main/services/agent/schemas/agent-card.ts:10`

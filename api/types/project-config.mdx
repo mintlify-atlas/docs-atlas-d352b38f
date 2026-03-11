@@ -1,0 +1,243 @@
+---
+title: "ProjectConfig"
+description: "Project configuration type for registered Arkitec agents"
+---
+
+## Overview
+
+The `ProjectConfig` type represents a registered Arkitec agent project in the workspace. It combines the agent's directory path, parsed configuration, and runtime task information.
+
+## Type Definition
+
+The `ProjectConfig` interface is defined in `src/main/services/inspector/inspector.service.ts`.
+
+```typescript
+interface ProjectConfig {
+  id: string;
+  path: string;
+  config: ArkitecConfig;
+  taskId?: string;
+}
+```
+
+## Fields
+
+<ResponseField name="id" type="string" required>
+  Unique identifier for the project, typically derived from the directory name.
+  
+  Example: `"code-reviewer"`, `"data-processor"`
+</ResponseField>
+
+<ResponseField name="path" type="string" required>
+  Absolute filesystem path to the project directory.
+  
+  Example: `"/home/user/workspace/agents/code-reviewer"`
+</ResponseField>
+
+<ResponseField name="config" type="ArkitecConfig" required>
+  Parsed configuration from the `ark.config.json` file. See [ArkitecConfig](#arkitecconfig) below.
+</ResponseField>
+
+<ResponseField name="taskId" type="string">
+  Optional cron task identifier assigned when the project is scheduled.
+  
+  Format: `"arkitec-{projectId}-{timestamp}"`
+  
+  Example: `"arkitec-code-reviewer-1678901234567"`
+</ResponseField>
+
+## ArkitecConfig
+
+The `ArkitecConfig` interface defines the contents of the `ark.config.json` file for each agent project.
+
+```typescript
+interface ArkitecConfig {
+  command: string[];
+  period: string;
+  logPath: string;
+  tasksPath?: string;
+  apiKey?: string;
+}
+```
+
+### Configuration Fields
+
+<ResponseField name="command" type="string[]" required>
+  Command array to execute for the agent. The first element is the executable, followed by arguments.
+  
+  Example: `["opencode", "run", "You are an autonomous agent. Read @cron.md to see what to do."]`
+</ResponseField>
+
+<ResponseField name="period" type="string" required>
+  Cron schedule expression defining when the agent runs.
+  
+  Must be a valid cron expression (validated by `CronService`).
+  
+  Examples:
+  - `"*/30 * * * *"` - Every 30 minutes
+  - `"0 */4 * * *"` - Every 4 hours
+  - `"0 9 * * 1-5"` - 9 AM on weekdays
+</ResponseField>
+
+<ResponseField name="logPath" type="string" required>
+  Relative or absolute path where agent execution logs are stored.
+  
+  Default: `".arkitec/logs"`
+</ResponseField>
+
+<ResponseField name="tasksPath" type="string">
+  Optional path for task-related files and data.
+  
+  Default: `".arkitec/tasks"`
+</ResponseField>
+
+<ResponseField name="apiKey" type="string">
+  Optional API key for external services or authentication.
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+```json ark.config.json
+{
+  "command": [
+    "opencode",
+    "run",
+    "You are an autonomous agent. Read @cron.md to see what to do."
+  ],
+  "period": "*/30 * * * *",
+  "logPath": ".arkitec/logs",
+  "tasksPath": ".arkitec/tasks"
+}
+```
+
+```typescript ProjectConfig Example
+const projectConfig: ProjectConfig = {
+  id: "code-reviewer",
+  path: "/home/user/workspace/agents/code-reviewer",
+  config: {
+    command: ["opencode", "run", "Review code changes"],
+    period: "0 */4 * * *",
+    logPath: ".arkitec/logs",
+    tasksPath: ".arkitec/tasks",
+    apiKey: "sk_test_..."
+  },
+  taskId: "arkitec-code-reviewer-1678901234567"
+};
+```
+
+```json Complete Directory Structure
+{
+  "projectDirectory": "/workspace/agents/code-reviewer",
+  "files": {
+    "ark.config.json": {
+      "command": ["opencode", "run", "Review PRs"],
+      "period": "*/30 * * * *",
+      "logPath": ".arkitec/logs"
+    },
+    "agent-card.json": {
+      "name": "Code Reviewer",
+      "version": "1.0.0",
+      "skills": []
+    },
+    ".arkitec/logs/": "Log directory",
+    ".arkitec/tasks/": "Tasks directory"
+  }
+}
+```
+</CodeGroup>
+
+## Validation Rules
+
+When parsing and validating project configurations:
+
+### Required Fields
+- **command**: Must be a non-empty array of strings
+- **period**: Must be a valid cron expression
+- **logPath**: Must be a non-empty string
+
+### Cron Period Validation
+The `period` field is validated using `CronService.validateSchedule()`. Invalid schedules will cause registration to fail.
+
+Valid examples:
+- `"* * * * *"` - Every minute
+- `"0 * * * *"` - Every hour
+- `"0 0 * * *"` - Daily at midnight
+- `"0 0 * * 0"` - Weekly on Sunday
+
+Invalid examples:
+- `"60 * * * *"` - Invalid minute value
+- `"invalid"` - Not a cron expression
+- `""` - Empty string
+
+## Usage in Arkitec
+
+The `InspectorService` manages `ProjectConfig` instances throughout the agent lifecycle:
+
+### Registration
+```typescript
+// Scan workspace and register projects
+await inspectorService.scanAndRegister();
+
+// Register a specific project
+const result = await inspectorService.registerProject("/path/to/agent");
+if (result.success) {
+  const config: ProjectConfig = result.data;
+  console.log(`Registered: ${config.id}`);
+}
+```
+
+### Retrieval
+```typescript
+// Get all registered projects
+const projects: ProjectConfig[] = inspectorService.getRegisteredProjects();
+
+// Get a specific project
+const result = inspectorService.getProject("/path/to/agent");
+if (result.success) {
+  const config: ProjectConfig = result.data;
+}
+```
+
+### Task Management
+```typescript
+// Invoke project immediately
+await inspectorService.invokeProjectNow(config.path);
+
+// Stop project execution
+await inspectorService.stopProjectNow(config.path);
+
+// Check project status
+const statusResult = await inspectorService.getProjectStatus(config.path);
+if (statusResult.success) {
+  console.log(`Running: ${statusResult.data.isRunning}`);
+}
+```
+
+## Related Types
+
+- [AgentCard](/api/types/agent-card) - Agent metadata stored alongside project config
+- [WorkspaceChangeEvent](/api/types/workspace-events) - Events emitted when configs change
+- **AgentNode** - Organization tree node containing project information
+- **ProjectStatus** - Runtime status for a project
+
+## File Location
+
+The configuration file must be named `ark.config.json` and located in the project's root directory:
+
+```
+project-directory/
+├── ark.config.json    # Required
+├── agent-card.json    # Required
+├── cron.md           # Common
+├── .arkitec/
+│   ├── logs/
+│   └── tasks/
+└── ... (agent source code)
+```
+
+## Source Code
+
+Defined in:
+- `ProjectConfig`: `src/main/services/inspector/inspector.service.ts:28`
+- `ArkitecConfig`: `src/main/services/config/config.service.ts:15`

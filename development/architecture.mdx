@@ -1,0 +1,291 @@
+---
+title: Technical Architecture
+description: Understanding Arkitec's Electron-based architecture, dependency injection, and service layer
+---
+
+## Overview
+
+Arkitec is built on Electron with a modern, scalable architecture that emphasizes:
+
+- **Type-safe IPC** via custom RPC system
+- **Dependency injection** with TSyringe for testable, modular services
+- **Feature-first structure** in the renderer for organized UI code
+- **Clean separation** between main process (Node.js) and renderer (React)
+
+## Electron Architecture
+
+Arkitec follows standard Electron patterns with enhanced type safety and developer experience.
+
+### Process Model
+
+<Tabs>
+  <Tab title="Main Process">
+    Node.js environment with full system access. Manages:
+    - Application lifecycle
+    - Native window creation
+    - File system operations
+    - MCP server connections
+    - Agent orchestration
+    
+    Entry point: `src/index.ts`
+  </Tab>
+  <Tab title="Renderer Process">
+    Chromium-based browser environment running React. Handles:
+    - User interface
+    - React state management
+    - Client-side routing
+    - UI interactions
+    
+    Entry point: `src/renderer/index.tsx`
+  </Tab>
+  <Tab title="Preload Script">
+    Secure bridge between processes with:
+    - Context isolation enabled
+    - Selective API exposure
+    - Type-safe RPC bridge
+    
+    Entry point: `src/preload.ts`
+  </Tab>
+</Tabs>
+
+### Security Model
+
+```typescript
+// src/index.ts:36-40
+const mainWindow = new BrowserWindow({
+  webPreferences: {
+    preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+    nodeIntegration: false,      // Disabled for security
+    contextIsolation: true,       // Enabled for security
+  },
+});
+```
+
+Arkitec enforces strict security:
+- **No `nodeIntegration`** in renderer
+- **Context isolation** prevents prototype pollution
+- **Preload script** provides controlled bridge
+
+## Dependency Injection Container
+
+Arkitec uses TSyringe for dependency injection, enabling testable, loosely-coupled services.
+
+### Container Setup
+
+<CodeGroup>
+```typescript src/main/app.container.ts
+import { createContainer } from "@main/lib/di/create-container";
+import { authDeps } from "@main/services/auth/auth.container";
+import { storeDeps } from "@main/services/store/store.container";
+import { agentDeps } from "@/main/services/agent/agent.container";
+// ... more service containers
+
+export const appContainer = createContainer({
+  ...authDeps,
+  ...storeDeps,
+  ...agentDeps,
+  ...skillsDeps,
+  ...bootstrapDeps,
+  ...memoryDeps,
+  // ... all services registered here
+});
+```
+
+```typescript src/main/lib/di/create-container.ts
+import { container as rootContainer } from 'tsyringe';
+
+export function createContainer<TDeps extends DependencyMap>(deps: TDeps) {
+  const scopedContainer = rootContainer.createChildContainer();
+
+  Object.values(deps).forEach((dep) => {
+    if (!scopedContainer.isRegistered(dep, true)) {
+      scopedContainer.registerSingleton(dep);
+    }
+  });
+
+  return {
+    get: <K extends keyof TDeps>(depKey: K) => 
+      scopedContainer.resolve(deps[depKey]),
+    resolve: <T>(dep: Constructor<T>) => 
+      scopedContainer.resolve(dep),
+    raw: scopedContainer,
+  };
+}
+```
+</CodeGroup>
+
+### Using the Container
+
+```typescript
+// src/index.ts:27
+import { appContainer } from "@main/app.container";
+import { AuthService } from "@main/services/auth/auth.service";
+
+// Resolve services before app is ready
+appContainer.resolve(AuthService).setupMain();
+
+// Resolve services after app is ready
+app.on("ready", () => {
+  const bootstrap = appContainer.resolve(BootstrapService);
+  bootstrap.start();
+});
+```
+
+<Info>
+All services are registered as **singletons** by default, ensuring consistent state across the application.
+</Info>
+
+## Service Layer
+
+Arkitec's main process is organized into domain services that handle business logic.
+
+### Service Structure
+
+Each service domain follows this pattern:
+
+```
+src/main/services/[domain]/
+├── [domain].service.ts      # Business logic
+├── [domain].rpc.ts          # RPC controller (IPC endpoints)
+├── [domain].container.ts    # DI registration
+├── [domain].errors.ts       # Domain-specific errors
+└── schemas/                 # Zod validation schemas
+```
+
+### Service Example
+
+<CodeGroup>
+```typescript Agent Service
+// src/main/services/agent/agent.service.ts
+import { injectable, inject } from "tsyringe";
+import type { Result } from "@/main/lib/results";
+
+@injectable()
+export class AgentService implements Bootstrappable {
+  constructor(
+    @inject(FileSystemService) private readonly fss: FileSystemService,
+    @inject(SkillsService) private readonly skills: SkillsService,
+    @inject(ChangesService) private readonly changes: ChangesService,
+  ) {}
+
+  async createAgent(
+    directory: string,
+    name: string,
+  ): Promise<Result<FileMutationResult, AgentError>> {
+    // Business logic here
+    return r.success(directory);
+  }
+
+  async getAgentCard(
+    directory: string,
+  ): Promise<Result<AgentCard, AgentError>> {
+    // Business logic here
+    return r.success(card);
+  }
+}
+```
+
+```typescript Container Registration
+// src/main/services/agent/agent.container.ts
+import { AgentService } from "./agent.service";
+import { AgentRpcController } from "./agent.rpc";
+
+export const agentDeps = {
+  AgentService,
+  AgentRpcController,
+};
+```
+</CodeGroup>
+
+### Bootstrap Lifecycle
+
+Services implementing `Bootstrappable` can hook into startup:
+
+```typescript
+// src/main/services/bootstrap/bootstrap.service.ts
+@injectable()
+export class BootstrapService {
+  async start(): Promise<void> {
+    const services: Bootstrappable[] = [
+      this.mcp,
+      this.memoryMcp,
+      this.inspector,
+      this.agents,
+      this.watcher,
+    ];
+
+    for (const service of services) {
+      if (service.onInit) {
+        const result = await service.onInit();
+        if (!result.success) {
+          console.error(`Service init failed: ${result.error}`);
+        }
+      }
+    }
+  }
+}
+```
+
+<Note>
+The bootstrap service ensures services initialize in the correct order, with proper error handling for startup failures.
+</Note>
+
+## Result Pattern
+
+Arkitec uses a type-safe Result pattern instead of throwing errors:
+
+```typescript
+type Result<T, E> = 
+  | { success: true; data: T }
+  | { success: false; error: E };
+
+// Usage in services
+const result = await agentService.createAgent(dir, name);
+if (!result.success) {
+  return r.fail("CreateError", result.error.message);
+}
+return r.success(result.data);
+```
+
+This pattern:
+- Makes error handling explicit
+- Prevents uncaught exceptions
+- Provides better TypeScript inference
+- Enables functional composition
+
+## Directory Structure
+
+```
+src/
+├── main/                    # Main process (Node.js)
+│   ├── lib/                # Shared utilities
+│   │   ├── di/            # Dependency injection
+│   │   └── rpc/           # RPC system
+│   └── services/          # Domain services
+│       ├── agent/
+│       ├── auth/
+│       ├── fs/
+│       └── mcp/
+├── renderer/              # Renderer process (React)
+│   ├── app/              # App shell & providers
+│   ├── features/         # Feature domains
+│   ├── hooks/            # React hooks
+│   └── shared/           # Shared UI components
+├── shared/               # Shared between processes
+│   └── rpc/             # RPC type definitions
+└── preload.ts           # Preload bridge script
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Main Process" icon="server" href="/development/main-process">
+    Deep dive into service implementation
+  </Card>
+  <Card title="Renderer Process" icon="browser" href="/development/renderer-process">
+    React architecture and patterns
+  </Card>
+  <Card title="RPC Communication" icon="arrow-right-arrow-left" href="/development/rpc-communication">
+    Type-safe IPC implementation
+  </Card>
+</CardGroup>

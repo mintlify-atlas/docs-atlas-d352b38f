@@ -1,0 +1,217 @@
+---
+title: Installation
+description: Install Arkitec and get started with agent-to-agent orchestration
+---
+
+## System Requirements
+
+Before installing Arkitec, ensure your system meets the following requirements:
+
+- **Node.js**: Version 18.x or higher
+- **npm**: Version 9.x or higher
+- **Operating System**: 
+  - Windows 10/11 (x64)
+  - macOS 10.15 (Catalina) or later
+  - Linux (Debian-based distributions, RPM-based distributions)
+- **Memory**: At least 4GB RAM recommended
+- **Disk Space**: 500MB free space for installation
+
+<Note>
+Arkitec is built with Electron 40.6.0 and uses modern web technologies including React 19 and TypeScript 5.
+</Note>
+
+## Installation Methods
+
+<Steps>
+  <Step title="Install from Source">
+    Clone the repository and install dependencies:
+
+    ```bash
+    git clone https://github.com/your-org/arkitec.git
+    cd arkitec
+    npm install
+    ```
+
+    <Note>
+    The installation includes development dependencies for building and packaging the application.
+    </Note>
+  </Step>
+
+  <Step title="Development Mode">
+    Start Arkitec in development mode with hot-reload:
+
+    ```bash
+    npm start
+    ```
+
+    This will launch the Electron Forge development server with webpack hot-reloading enabled.
+  </Step>
+
+  <Step title="Build for Production">
+    Package Arkitec for your platform:
+
+    <CodeGroup>
+      ```bash Windows
+      npm run make
+      ```
+
+      ```bash macOS
+      npm run make
+      ```
+
+      ```bash Linux (DEB)
+      npm run make
+      ```
+
+      ```bash Linux (RPM)
+      npm run make
+      ```
+    </CodeGroup>
+
+    The packaged application will be available in the `out/make` directory.
+  </Step>
+</Steps>
+
+## Configuration
+
+### Protocol Registration
+
+Arkitec registers a custom protocol handler (`com.arkitec.app://`) for authentication deep-linking. This is automatically configured during the build process:
+
+```typescript
+{
+  protocols: [
+    {
+      name: "Arkitec Protocol",
+      schemes: ["com.arkitec.app"],
+    },
+  ]
+}
+```
+
+<Warning>
+On Linux, you may need to manually register the protocol handler with your desktop environment after installation.
+</Warning>
+
+### Environment Variables
+
+Arkitec supports the following optional environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ARKITEC_DISABLE_GPU` | Disable hardware acceleration | `0` (GPU enabled) |
+| `ARKITEC_OPEN_DEVTOOLS` | Automatically open DevTools in development | `0` (disabled) |
+
+Set these before starting the application:
+
+```bash
+export ARKITEC_DISABLE_GPU=1
+npm start
+```
+
+## First Launch
+
+When you first launch Arkitec, you'll see the authentication screen. The application requires authentication before you can access the workbench.
+
+<Steps>
+  <Step title="Launch the Application">
+    Open Arkitec from your applications folder or run:
+
+    ```bash
+    npm start
+    ```
+
+    The main window will open with dimensions 1400x900 (minimum 1100x720).
+  </Step>
+
+  <Step title="Wait for Initialization">
+    The application will display a loading screen while it:
+    - Initializes the authentication service
+    - Sets up IPC handlers for main-renderer communication
+    - Bootstraps core services
+  </Step>
+
+  <Step title="Authentication Required">
+    You'll be presented with the authentication screen. Proceed to the [Quickstart guide](/quickstart) to complete the authentication process and start using Arkitec.
+  </Step>
+</Steps>
+
+## Verification
+
+To verify your installation is working correctly:
+
+1. **Check the application launches** without errors
+2. **Verify the window size** is correct (1400x900 default)
+3. **Confirm the authentication screen** is displayed
+4. **Check the console** for any startup errors (in development mode)
+
+If you encounter any issues, check the console output for error messages related to:
+- Missing dependencies
+- Protocol registration failures
+- IPC communication errors
+- Bootstrap service failures
+
+## Troubleshooting
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="Application won't start">
+    **Possible causes:**
+    - Node.js version incompatibility
+    - Missing native dependencies
+    - GPU hardware acceleration issues
+
+    **Solution:**
+    ```bash
+    # Verify Node.js version
+    node --version  # Should be 18.x or higher
+
+    # Rebuild native modules
+    npm rebuild
+
+    # Try disabling GPU acceleration
+    export ARKITEC_DISABLE_GPU=1
+    npm start
+    ```
+  </Accordion>
+
+  <Accordion title="Squirrel startup errors (Windows)">
+    If you see errors related to `electron-squirrel-startup`, this is normal during Windows installer operations. The app will automatically exit during installation/uninstallation events.
+  </Accordion>
+
+  <Accordion title="Protocol handler not working">
+    **On macOS:**
+    The protocol is automatically registered. If deep-linking fails, try reinstalling the application.
+
+    **On Linux:**
+    You may need to manually update your desktop file to include the protocol handler:
+    ```desktop
+    Exec=arkitec %U
+    MimeType=x-scheme-handler/com.arkitec.app;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+Once Arkitec is installed and launches successfully, proceed to the [Quickstart guide](/quickstart) to:
+- Authenticate with your account
+- Open your first workspace
+- Create an agent card
+- View your organization structure
+
+## Dependencies
+
+Arkitec is built with the following key technologies:
+
+- **Electron**: 40.6.0
+- **React**: 19.2.4
+- **TypeScript**: 5.9.3
+- **Better Auth**: 1.5.3 (with Electron adapter)
+- **Electron Forge**: 7.11.1
+- **React Flow**: 12.10.1 (for organization visualization)
+- **TanStack Query**: 5.90.21 (for data fetching)
+- **Zustand**: 5.0.11 (for state management)
+
+For a complete list of dependencies, see the `package.json` file in the source repository.

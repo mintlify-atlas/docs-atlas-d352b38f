@@ -1,0 +1,598 @@
+---
+title: File System
+description: Workspace navigation, file operations, and real-time change detection
+---
+
+Arkitec's File System service provides a comprehensive API for working with files and directories in your workspace. It handles path resolution, file operations, tree navigation, and integrates with the watcher service for real-time updates.
+
+## Workspace Root
+
+All file operations in Arkitec are scoped to a **workspace root** directory. This ensures operations stay within the user's project and prevents accidental access to system files.
+
+### Setting the Workspace Root
+
+The workspace root is determined by:
+
+1. **Environment variable**: `ARKITEC_FS_ROOT`
+2. **Last opened folder**: Persisted in Electron's store
+3. **Default**: User's home directory
+
+```typescript
+// Set via environment
+export ARKITEC_FS_ROOT="/Users/you/projects"
+
+// Or open a folder programmatically
+const result = await fss.openFolder('/Users/you/projects');
+
+if (result.success) {
+  console.log('Workspace root:', result.data);
+}
+```
+
+<Warning>
+  All file paths are resolved relative to the workspace root. You cannot access files outside this directory using relative paths.
+</Warning>
+
+### Opening a Folder
+
+```typescript
+const result = await fss.openFolder('/path/to/workspace');
+
+if (result.success) {
+  // The watcher automatically rebinds to the new root
+  // Projects are rescanned and re-registered
+  console.log('Opened:', result.data);
+}
+```
+
+When you open a folder:
+1. The new path is validated and normalized
+2. The workspace root is updated
+3. The last opened folder is saved to persistent storage
+4. The watcher rebinds to the new root
+5. The workspace is refreshed
+
+## Path Resolution
+
+Arkitec uses **relative paths** for all file operations. These paths are resolved against the workspace root.
+
+### Relative to Absolute
+
+```typescript
+const result = await fss.getAbsolutePath('src/index.ts');
+
+if (result.success) {
+  // If workspace root is /Users/you/project
+  console.log(result.data);  // /Users/you/project/src/index.ts
+}
+```
+
+### Get Root Path
+
+```typescript
+const result = await fss.getRootPath();
+
+if (result.success) {
+  console.log('Workspace root:', result.data);
+}
+```
+
+<Tip>
+  Path resolution automatically normalizes separators and handles edge cases like `..` and `.` segments.
+</Tip>
+
+## File Operations
+
+### Reading Files
+
+Read a file's contents as UTF-8:
+
+```typescript
+const result = await fss.readFile('src/config.json');
+
+if (result.success) {
+  console.log('Path:', result.data.path);
+  console.log('Content:', result.data.content);
+}
+```
+
+<Accordion title="Error Handling">
+  Reading a file can fail for several reasons:
+  - Path doesn't exist: `FileAccessError`
+  - Path is a directory: `NotAFileError`
+  - Permission denied: `FileAccessError`
+  - Invalid path (outside workspace): `InvalidPathError`
+</Accordion>
+
+### Writing Files
+
+Write content to a file (creates parent directories automatically):
+
+```typescript
+const result = await fss.writeFile(
+  'src/new-file.ts',
+  'export const foo = "bar";'
+);
+
+if (result.success) {
+  console.log('Written to:', result.data);  // Relative path
+}
+```
+
+The write operation:
+1. Resolves the relative path to absolute
+2. Creates parent directories if they don't exist
+3. Writes the content as UTF-8
+4. Returns the relative path on success
+
+### Appending to Files
+
+Append content to an existing file (or create if it doesn't exist):
+
+```typescript
+const result = await fss.appendFile(
+  'logs/app.log',
+  '\n[2025-01-15] New log entry'
+);
+
+if (result.success) {
+  console.log('Appended to:', result.data);
+}
+```
+
+### Renaming/Moving Files
+
+Rename or move a file or directory:
+
+```typescript
+const result = await fss.renamePath(
+  'src/old-name.ts',
+  'src/new-name.ts'
+);
+
+if (result.success) {
+  console.log('Renamed to:', result.data);
+}
+```
+
+You can also move files to different directories:
+
+```typescript
+const result = await fss.renamePath(
+  'src/file.ts',
+  'lib/file.ts'
+);
+```
+
+<Warning>
+  If the destination path already exists, the operation will fail. You must explicitly delete the destination first.
+</Warning>
+
+### Deleting Files
+
+Delete a file or directory (recursively):
+
+```typescript
+const result = await fss.deletePath('temp/cache');
+
+if (result.success) {
+  console.log('Deleted:', result.data);
+}
+```
+
+The delete operation:
+- Works on both files and directories
+- Recursively deletes directory contents
+- Uses `force: true` to ignore missing files
+
+## Directory Operations
+
+### Creating Directories
+
+Create a directory:
+
+```typescript
+// Non-recursive (fails if parent doesn't exist)
+const result = await fss.mkdir('new-dir', false);
+
+// Recursive (creates parent directories)
+const result = await fss.mkdir('path/to/deep/dir', true);
+
+if (result.success) {
+  console.log('Created:', result.data);
+}
+```
+
+### Checking File Stats
+
+Get information about a file or directory:
+
+```typescript
+const result = await fss.stat('src/index.ts');
+
+if (result.success) {
+  if (result.data.isDirectory()) {
+    console.log('It\'s a directory');
+  } else {
+    console.log('It\'s a file');
+  }
+}
+```
+
+### Listing Directory Tree
+
+Get the entire workspace as a tree structure:
+
+```typescript
+const result = await fss.listTree();
+
+if (result.success) {
+  console.log('Root:', result.data.name);
+  console.log('Children:', result.data.children);
+}
+```
+
+#### Tree Node Structure
+
+```typescript
+interface FileTreeNode {
+  name: string;           // File/directory name
+  path: string;           // Relative path from root
+  type: 'file' | 'directory';
+  children?: FileTreeNode[];  // For directories
+}
+```
+
+#### Example Tree
+
+```typescript
+{
+  name: 'project',
+  path: '',
+  type: 'directory',
+  children: [
+    {
+      name: 'src',
+      path: 'src',
+      type: 'directory',
+      children: [
+        { name: 'index.ts', path: 'src/index.ts', type: 'file' },
+        { name: 'config.ts', path: 'src/config.ts', type: 'file' }
+      ]
+    },
+    { name: 'package.json', path: 'package.json', type: 'file' }
+  ]
+}
+```
+
+<Tip>
+  The tree automatically ignores common directories like `node_modules`, `.git`, and `dist`. See the ignored list below.
+</Tip>
+
+## Ignored Directories
+
+Arkitec automatically skips these directories when scanning:
+
+- `node_modules`
+- `.git`
+- `dist`
+- `build`
+- `.next`
+- `.cache`
+- `coverage`
+- `.turbo`
+- `.DS_Store` (macOS)
+
+These directories are ignored in:
+- File tree generation (`listTree`)
+- Project scanning (`findArkitecProjects`)
+- File watching (watcher service)
+
+## Real-Time Watching
+
+The file system service integrates with the **Watcher Service** to provide real-time file change notifications.
+
+### How It Works
+
+When you open a workspace:
+1. The watcher binds to the workspace root
+2. Chokidar monitors all files and directories
+3. Changes are debounced and stabilized (waits 120ms after last write)
+4. Events are published to the change bus
+5. Services react to relevant changes
+
+### Filesystem Events
+
+The watcher publishes these events:
+
+<Accordion title="filesystem.changed (add)">
+  A new file was created.
+  
+  ```typescript
+  {
+    kind: 'filesystem.changed',
+    type: 'add',
+    path: 'src/new-file.ts',
+    rootPath: '/workspace',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+<Accordion title="filesystem.changed (change)">
+  An existing file was modified.
+  
+  ```typescript
+  {
+    kind: 'filesystem.changed',
+    type: 'change',
+    path: 'src/index.ts',
+    rootPath: '/workspace',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+<Accordion title="filesystem.changed (unlink)">
+  A file was deleted.
+  
+  ```typescript
+  {
+    kind: 'filesystem.changed',
+    type: 'unlink',
+    path: 'temp/cache.json',
+    rootPath: '/workspace',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+<Accordion title="filesystem.changed (addDir)">
+  A new directory was created.
+  
+  ```typescript
+  {
+    kind: 'filesystem.changed',
+    type: 'addDir',
+    path: 'src/components',
+    rootPath: '/workspace',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+<Accordion title="filesystem.changed (unlinkDir)">
+  A directory was deleted.
+  
+  ```typescript
+  {
+    kind: 'filesystem.changed',
+    type: 'unlinkDir',
+    path: 'old-directory',
+    rootPath: '/workspace',
+    timestamp: 1234567890
+  }
+  ```
+</Accordion>
+
+### Subscribing to Changes
+
+Services can subscribe to filesystem changes:
+
+```typescript
+changes.subscribe((event) => {
+  if (event.kind === 'filesystem.changed') {
+    console.log(`File ${event.type}: ${event.path}`);
+  }
+});
+```
+
+### Watch Stability
+
+To avoid triggering events while a file is still being written:
+
+```typescript
+awaitWriteFinish: {
+  stabilityThreshold: 120,  // Wait 120ms after last change
+  pollInterval: 25          // Check every 25ms
+}
+```
+
+This ensures:
+- Large files finish writing before events fire
+- Multiple rapid changes are collapsed
+- Save operations from editors complete fully
+
+## Root Readiness
+
+All file operations automatically ensure the workspace root is ready before executing:
+
+```typescript
+@FileSystemService.EnsureRoot
+async readFile(relativePath: string) {
+  // Root is guaranteed to exist and be accessible
+}
+```
+
+The `@EnsureRoot` decorator:
+1. Checks if root initialization is pending
+2. Waits for the root directory to be created/validated
+3. Returns an error if root access fails
+4. Proceeds with the operation if successful
+
+## Error Handling
+
+File system operations use the Result pattern for error handling:
+
+<Accordion title="InvalidPathError">
+  The provided path is invalid or attempts to access files outside the workspace.
+  
+  ```typescript
+  if (!result.success && result.error.type === 'InvalidPathError') {
+    console.error('Invalid path:', result.error.message);
+  }
+  ```
+</Accordion>
+
+<Accordion title="FileAccessError">
+  Cannot access the file (doesn't exist, permission denied, etc.).
+  
+  ```typescript
+  if (!result.success && result.error.type === 'FileAccessError') {
+    console.error('Cannot access:', result.error.message);
+  }
+  ```
+</Accordion>
+
+<Accordion title="NotAFileError">
+  The path points to a directory when a file was expected.
+  
+  ```typescript
+  if (!result.success && result.error.type === 'NotAFileError') {
+    console.error('Path is a directory:', result.error.message);
+  }
+  ```
+</Accordion>
+
+<Accordion title="FileWriteError">
+  Failed to write or create a file/directory.
+  
+  ```typescript
+  if (!result.success && result.error.type === 'FileWriteError') {
+    console.error('Write failed:', result.error.message);
+  }
+  ```
+</Accordion>
+
+<Accordion title="RootAccessError">
+  Cannot access or create the workspace root directory.
+  
+  ```typescript
+  if (!result.success && result.error.type === 'RootAccessError') {
+    console.error('Root access failed:', result.error.message);
+  }
+  ```
+</Accordion>
+
+## Best Practices
+
+1. **Always use relative paths** - Never construct absolute paths manually
+2. **Check result success** - Always check `result.success` before accessing `result.data`
+3. **Handle errors gracefully** - Provide user feedback when operations fail
+4. **Use recursive mkdir** - Set `recursive: true` when creating deep directory structures
+5. **Validate before delete** - Confirm destructive operations with the user
+6. **Watch for changes** - Subscribe to filesystem events to keep UI in sync
+
+## Examples
+
+### Copy a File
+
+Arkitec doesn't have a direct copy method, but you can implement it:
+
+```typescript
+async function copyFile(source: string, dest: string) {
+  const readResult = await fss.readFile(source);
+  if (!readResult.success) return readResult;
+  
+  return await fss.writeFile(dest, readResult.data.content);
+}
+
+const result = await copyFile('src/template.ts', 'src/new-file.ts');
+```
+
+### Create a Project Structure
+
+```typescript
+async function createProject(name: string) {
+  // Create directories
+  await fss.mkdir(`${name}/src`, true);
+  await fss.mkdir(`${name}/tests`, true);
+  
+  // Create files
+  await fss.writeFile(`${name}/src/index.ts`, 'export {}');
+  await fss.writeFile(`${name}/package.json`, JSON.stringify({
+    name,
+    version: '1.0.0'
+  }, null, 2));
+  
+  console.log(`Project ${name} created`);
+}
+
+await createProject('my-project');
+```
+
+### Walk Directory Tree
+
+```typescript
+function walkTree(node: FileTreeNode, depth = 0) {
+  const indent = '  '.repeat(depth);
+  console.log(`${indent}${node.name} (${node.type})`);
+  
+  if (node.children) {
+    node.children.forEach(child => walkTree(child, depth + 1));
+  }
+}
+
+const treeResult = await fss.listTree();
+if (treeResult.success) {
+  walkTree(treeResult.data);
+}
+```
+
+## API Reference
+
+<Accordion title="openFolder(directory)">
+  Opens a new workspace folder.
+  
+  ```typescript
+  const result = await fss.openFolder('/path/to/workspace');
+  ```
+</Accordion>
+
+<Accordion title="getRootPath()">
+  Returns the current workspace root path.
+  
+  ```typescript
+  const result = await fss.getRootPath();
+  ```
+</Accordion>
+
+<Accordion title="getAbsolutePath(relativePath)">
+  Converts a relative path to an absolute path.
+  
+  ```typescript
+  const result = await fss.getAbsolutePath('src/index.ts');
+  ```
+</Accordion>
+
+<Accordion title="readFile(relativePath)">
+  Reads a file's contents.
+  
+  ```typescript
+  const result = await fss.readFile('package.json');
+  ```
+</Accordion>
+
+<Accordion title="writeFile(relativePath, content)">
+  Writes content to a file.
+  
+  ```typescript
+  const result = await fss.writeFile('src/new.ts', 'export {}');
+  ```
+</Accordion>
+
+<Accordion title="appendFile(relativePath, content)">
+  Appends content to a file.
+  
+  ```typescript
+  const result = await fss.appendFile('log.txt', '\nNew line');
+  ```
+</Accordion>
+
+<Accordion title="deletePath(relativePath)">
+  Deletes a file or directory.
+  
+  ```typescript
+  const result = await fss.deletePath('temp');
+  ```
+</Accordion>

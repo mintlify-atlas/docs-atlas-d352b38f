@@ -1,0 +1,566 @@
+---
+title: Renderer Process
+description: Understanding Arkitec's React architecture, feature-first structure, and UI patterns
+---
+
+## Overview
+
+The renderer process runs in a Chromium browser environment with React. It provides the user interface and communicates with the main process via RPC.
+
+Key characteristics:
+- **React 18** with hooks and functional components
+- **TanStack Query** for server state management
+- **Zustand** for client state management
+- **Feature-first architecture** for scalability
+- **Type-safe RPC** for main process communication
+
+## Architecture
+
+The renderer follows a layered architecture with clear dependency boundaries.
+
+### Directory Structure
+
+```
+src/renderer/
+├── app/                    # App shell and providers
+│   ├── app.tsx            # Root component with routing
+│   ├── shell.tsx          # Provider wrapper
+│   └── providers.tsx      # Global providers setup
+├── features/              # Feature domains (UI)
+│   ├── forge/            # Forge workbench features
+│   └── molecules/        # Reusable UI molecules
+├── hooks/                 # Shared React hooks
+│   ├── rpc/              # RPC client hooks
+│   ├── use-auth.ts
+│   └── use-editor.ts
+├── providers/            # Context providers
+│   ├── auth-provider.tsx
+│   ├── query-client-provider.tsx
+│   └── theme-provider.tsx
+├── screens/              # Top-level screens
+│   ├── auth.tsx
+│   └── workbench.tsx
+├── shared/               # Shared utilities
+│   ├── lib/             # Helper functions
+│   └── ui/              # UI primitives (shadcn)
+├── stores/              # Zustand stores
+└── services.ts          # RPC client instance
+```
+
+### Dependency Boundaries
+
+<Info>
+These rules keep the codebase maintainable as it scales:
+</Info>
+
+<Tabs>
+  <Tab title="app/">
+    Can import from:
+    - `features/`
+    - `shared/`
+    - `providers/`
+    - `screens/`
+    
+    **Role:** Application bootstrap and provider wiring
+  </Tab>
+  <Tab title="features/">
+    Can import from:
+    - `shared/`
+    - `hooks/`
+    - `stores/`
+    
+    **Role:** Domain-specific UI components
+  </Tab>
+  <Tab title="shared/">
+    Cannot import from:
+    - `features/`
+    - `app/`
+    
+    **Role:** Reusable utilities and UI primitives
+  </Tab>
+</Tabs>
+
+## Application Bootstrap
+
+The React app initializes through a layered provider structure.
+
+### App Entry Point
+
+<CodeGroup>
+```tsx Shell Component
+// src/renderer/app/shell.tsx
+import { AppProviders } from "@/renderer/app/providers";
+import { App } from "@/renderer/app/app";
+
+export function Shell() {
+  return (
+    <AppProviders>
+      <App />
+    </AppProviders>
+  );
+}
+```
+
+```tsx Global Providers
+// src/renderer/app/providers.tsx
+import { QueryClientProvider } from "@/renderer/providers/query-client-provider";
+import { ThemeProvider } from "@/renderer/providers/theme-provider";
+import { AuthProvider } from "@/renderer/providers/auth-provider";
+import { Toaster } from "@/renderer/shared/ui/sonner";
+
+function AppProviders({ children }: { children: ReactNode }) {
+  return (
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+      <QueryClientProvider>
+        <AuthProvider>{children}</AuthProvider>
+      </QueryClientProvider>
+      <Toaster />
+    </ThemeProvider>
+  );
+}
+```
+
+```tsx Root Component
+// src/renderer/app/app.tsx
+import { useAuthStore } from "@/renderer/providers/auth-provider";
+import { Auth } from "@/renderer/screens/auth";
+import { Workbench } from "@/renderer/screens/workbench";
+
+export function App() {
+  const status = useAuthStore((state) => state.status);
+
+  switch (status) {
+    case "loading":
+      return <AuthLoading />;
+    case "unauthenticated":
+      return <Auth />;
+    case "authenticated":
+      return <Workbench />;
+    default:
+      return null;
+  }
+}
+```
+</CodeGroup>
+
+### Provider Hierarchy
+
+<Steps>
+  <Step title="Theme Provider">
+    Sets up dark/light mode and CSS variables
+  </Step>
+  <Step title="Query Client Provider">
+    Configures TanStack Query for server state
+  </Step>
+  <Step title="Auth Provider">
+    Manages authentication state and session
+  </Step>
+  <Step title="App Component">
+    Routes to Auth or Workbench based on auth status
+  </Step>
+</Steps>
+
+## State Management
+
+Arkitec uses different state management patterns for different needs:
+
+### Server State (TanStack Query)
+
+For data from the main process:
+
+```tsx
+// src/renderer/hooks/rpc/agent.ts
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { services } from "@/renderer/services";
+
+export function useAgentCardQuery(directory: string | null) {
+  return useQuery({
+    queryKey: ["agent", "card", directory],
+    queryFn: () => services.agent.getAgentCard(directory!),
+    enabled: !!directory,
+  });
+}
+
+export function useUpdateAgentCardMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ directory, card }: { directory: string; card: AgentCard }) =>
+      services.agent.updateAgentCard(directory, card),
+    onSuccess: (_, { directory }) => {
+      queryClient.invalidateQueries({
+        queryKey: ["agent", "card", directory],
+      });
+    },
+  });
+}
+```
+
+**Benefits:**
+- Automatic caching and deduplication
+- Background refetching
+- Optimistic updates
+- Loading and error states
+
+### Client State (Zustand)
+
+For UI state that doesn't need to persist:
+
+```typescript
+// Example Zustand store
+import { create } from "zustand";
+
+interface FileSystemStore {
+  selectedPath: string | null;
+  expandedPaths: Set<string>;
+  setSelectedPath: (path: string | null) => void;
+  toggleExpanded: (path: string) => void;
+}
+
+export const useFileSystemStore = create<FileSystemStore>((set) => ({
+  selectedPath: null,
+  expandedPaths: new Set(),
+  setSelectedPath: (path) => set({ selectedPath: path }),
+  toggleExpanded: (path) =>
+    set((state) => {
+      const next = new Set(state.expandedPaths);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return { expandedPaths: next };
+    }),
+}));
+```
+
+**Usage:**
+```tsx
+function FileExplorer() {
+  const selectedPath = useFileSystemStore((state) => state.selectedPath);
+  const setSelectedPath = useFileSystemStore((state) => state.setSelectedPath);
+
+  return (
+    <div onClick={() => setSelectedPath("/path/to/file")}>
+      {selectedPath || "No file selected"}
+    </div>
+  );
+}
+```
+
+### Auth State
+
+```typescript
+// src/renderer/hooks/use-auth.ts
+import { useAuthStore } from "@/renderer/providers/auth-provider";
+
+export function useAuth() {
+  return useAuthStore((state) => state);
+}
+
+// Usage
+function MyComponent() {
+  const { user, status, signOut } = useAuth();
+
+  if (status === "loading") return <LoadingSpinner />;
+  if (status === "unauthenticated") return <SignInPrompt />;
+
+  return (
+    <div>
+      <p>Welcome, {user.name}</p>
+      <button onClick={signOut}>Sign Out</button>
+    </div>
+  );
+}
+```
+
+## Feature-First Structure
+
+Features are organized by domain, not by technical layer:
+
+```
+features/
+├── forge/                    # Forge workbench domain
+│   ├── lib/                 # Feature-specific utilities
+│   │   ├── task-to-flow.ts
+│   │   └── org-to-flow.ts
+│   ├── store.ts            # Feature state
+│   └── types/              # Feature types
+└── molecules/               # Reusable UI components
+    ├── input.tsx
+    ├── select.tsx
+    └── field-row.tsx
+```
+
+### Feature Component Example
+
+```tsx
+// Feature component with hooks and RPC
+import { useAgentCardQuery, useUpdateAgentCardMutation } from "@/renderer/hooks/rpc/agent";
+import { Input } from "@/renderer/features/molecules/input";
+import { FieldRow } from "@/renderer/features/molecules/field-row";
+
+interface AgentEditorProps {
+  directory: string;
+}
+
+export function AgentEditor({ directory }: AgentEditorProps) {
+  const { data: card, isLoading } = useAgentCardQuery(directory);
+  const updateMutation = useUpdateAgentCardMutation();
+
+  const handleSave = (updates: Partial<AgentCard>) => {
+    if (!card) return;
+    updateMutation.mutate({
+      directory,
+      card: { ...card, ...updates },
+    });
+  };
+
+  if (isLoading) return <Skeleton />;
+  if (!card) return <EmptyState />;
+
+  return (
+    <div className="space-y-4">
+      <FieldRow label="Name">
+        <Input
+          value={card.name}
+          onChange={(e) => handleSave({ name: e.target.value })}
+        />
+      </FieldRow>
+      <FieldRow label="Description">
+        <Input
+          value={card.description}
+          onChange={(e) => handleSave({ description: e.target.value })}
+        />
+      </FieldRow>
+    </div>
+  );
+}
+```
+
+## RPC Client Usage
+
+The renderer communicates with the main process using type-safe RPC:
+
+### RPC Client Instance
+
+```typescript
+// src/renderer/services.ts
+import type { ControllerRegistry } from "../main/lib/rpc/registry";
+import type { RendererServices } from "../shared/rpc/types";
+
+function createRpcClient<TRegistry>(): RendererServices<TRegistry> {
+  const bridge = window.rpcBridge;
+  return new Proxy({}, {
+    get: (_, service: string) => createServiceProxy(service, bridge),
+  });
+}
+
+export const services = createRpcClient<ControllerRegistry>();
+```
+
+### Using Services
+
+<Tabs>
+  <Tab title="Invoke (await)">
+    ```typescript
+    // Promise-based call
+    const card = await services.agent.getAgentCard(directory);
+    ```
+    Used for queries that need a return value
+  </Tab>
+  <Tab title="Send (fire and forget)">
+    ```typescript
+    // No return value expected
+    services.agent.send.syncAgentSkills(directory);
+    ```
+    Used for commands that don't return data
+  </Tab>
+  <Tab title="Stream (chunked data)">
+    ```typescript
+    // Receive data in chunks
+    const cleanup = services.mcp.stream.executeTask(
+      taskId,
+      (chunk) => console.log(chunk),
+      {
+        onEnd: () => console.log("Stream ended"),
+        onError: (err) => console.error(err),
+      }
+    );
+
+    // Call cleanup to close stream
+    cleanup();
+    ```
+    Used for streaming responses
+  </Tab>
+  <Tab title="Events (pub/sub)">
+    ```typescript
+    // Subscribe to events from main process
+    const unsubscribe = services.agent.on("card.updated", (payload) => {
+      console.log("Card updated:", payload);
+    });
+
+    // Cleanup
+    unsubscribe();
+    ```
+    Used for reactive updates
+  </Tab>
+</Tabs>
+
+### React Query Integration
+
+```typescript
+// Wrap RPC calls in hooks for automatic caching
+export function useAgentCardQuery(directory: string | null) {
+  return useQuery({
+    queryKey: ["agent", "card", directory],
+    queryFn: () => services.agent.getAgentCard(directory!),
+    enabled: !!directory,  // Only run when directory is set
+  });
+}
+
+export function useCreateAgent() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ parentPath, agentName }) =>
+      services.agent.createAgent(parentPath, agentName),
+    onSuccess: () => {
+      // Invalidate related queries
+      queryClient.invalidateQueries({ queryKey: ["filesystem", "tree"] });
+      queryClient.invalidateQueries({ queryKey: ["registry", "org"] });
+    },
+  });
+}
+```
+
+## UI Patterns
+
+Arkitec uses shadcn/ui for base components with custom molecules for domain-specific patterns.
+
+### Component Composition
+
+```tsx
+// Compose primitives into molecules
+import { Input } from "@/renderer/shared/ui/input";
+import { Label } from "@/renderer/shared/ui/label";
+
+export function FieldRow({ label, children }: FieldRowProps) {
+  return (
+    <div className="grid grid-cols-[200px_1fr] gap-4 items-center">
+      <Label className="text-right">{label}</Label>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+// Use in features
+<FieldRow label="Agent Name">
+  <Input value={name} onChange={handleChange} />
+</FieldRow>
+```
+
+### Loading States
+
+```tsx
+function AgentCard({ directory }: Props) {
+  const { data, isLoading, error } = useAgentCardQuery(directory);
+
+  if (isLoading) return <Skeleton className="h-20 w-full" />;
+  if (error) return <ErrorState error={error.message} />;
+  if (!data) return <EmptyState />;
+
+  return <div>{/* Render data */}</div>;
+}
+```
+
+### Optimistic Updates
+
+```tsx
+function SkillList({ directory }: Props) {
+  const queryClient = useQueryClient();
+  const removeMutation = useRemoveSkillFromCard();
+
+  const handleRemove = async (skillId: string) => {
+    // Optimistically update UI
+    queryClient.setQueryData(
+      ["agent", "card", directory],
+      (old: AgentCard) => ({
+        ...old,
+        skills: old.skills.filter((s) => s.id !== skillId),
+      })
+    );
+
+    // Execute mutation
+    removeMutation.mutate({ directory, skillId });
+  };
+
+  // ...
+}
+```
+
+## Performance Patterns
+
+### Query Prefetching
+
+```typescript
+// Prefetch data on hover
+const queryClient = useQueryClient();
+
+const handleMouseEnter = (directory: string) => {
+  queryClient.prefetchQuery({
+    queryKey: ["agent", "card", directory],
+    queryFn: () => services.agent.getAgentCard(directory),
+  });
+};
+```
+
+### React.memo for Expensive Components
+
+```tsx
+import { memo } from "react";
+
+export const FileTree = memo(function FileTree({ nodes }: Props) {
+  // Expensive rendering logic
+  return <div>{/* ... */}</div>;
+});
+```
+
+### Virtualization for Long Lists
+
+```tsx
+import { useVirtualizer } from "@tanstack/react-virtual";
+
+function LargeList({ items }: Props) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 50,
+  });
+
+  return (
+    <div ref={parentRef} className="h-[500px] overflow-auto">
+      <div style={{ height: `${virtualizer.getTotalSize()}px` }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => (
+          <div key={virtualRow.key}>
+            {items[virtualRow.index].name}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="RPC Communication" icon="arrow-right-arrow-left" href="/development/rpc-communication">
+    Learn the full RPC system implementation
+  </Card>
+  <Card title="Main Process" icon="server" href="/development/main-process">
+    Understand the backend service layer
+  </Card>
+</CardGroup>

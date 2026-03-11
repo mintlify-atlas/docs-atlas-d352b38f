@@ -1,0 +1,595 @@
+---
+title: InspectorService
+description: Service for discovering, registering, and managing Arkitec projects with scheduled tasks
+---
+
+The `InspectorService` (also referred to as `RegistryService` in logs) is responsible for discovering Arkitec projects in the workspace, registering them, managing their scheduled tasks, and maintaining an organization hierarchy.
+
+## Injection
+
+The service is a singleton injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { InspectorService } from "@/main/services/inspector/inspector.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(InspectorService) private readonly inspector: InspectorService
+  ) {}
+}
+```
+
+## Public Methods
+
+### scanAndRegister
+
+Scans the workspace for Arkitec projects and registers them automatically.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="number">
+  The number of projects successfully registered
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ScanError` - Failed to scan directory tree or resolve paths
+
+**Behavior:**
+- Searches the entire workspace tree for `arkitec.json` config files
+- Registers each discovered project
+- Schedules cron tasks for each project based on their configuration
+- Emits a `registry.updated` event with reason `"scan"`
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.scanAndRegister();
+
+if (result.success) {
+  console.log(`Registered ${result.data} projects`);
+} else {
+  console.error(`Scan failed: ${result.error.message}`);
+}
+```
+
+```typescript Initialization
+// Typically called during service initialization
+async onInit() {
+  const scanResult = await this.scanAndRegister();
+  if (!scanResult.success) {
+    console.error(`Initial scan failed: ${scanResult.error.message}`);
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### registerProject
+
+Registers a single Arkitec project and schedules its cron task.
+
+<ParamField path="directory" type="string" required>
+  Absolute path to the project directory containing `arkitec.json`
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional configuration
+  - `emitChange` (boolean): Whether to emit a registry update event (default: true)
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="ProjectConfig">
+  The registered project configuration
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ParseError` - Failed to parse `arkitec.json`
+- `AlreadyRegisteredError` - Project is already registered
+- `RegistrationError` - Failed to schedule or start the cron task
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.registerProject(
+  "/home/user/projects/my-agent"
+);
+
+if (result.success) {
+  console.log(`Registered: ${result.data.id}`);
+  console.log(`Schedule: ${result.data.config.period}`);
+  console.log(`Task ID: ${result.data.taskId}`);
+} else {
+  console.error(`Registration failed: ${result.error.message}`);
+}
+```
+
+```typescript ProjectConfig Type
+interface ProjectConfig {
+  id: string;           // Project display name
+  path: string;         // Absolute directory path
+  config: ArkitecConfig; // Parsed arkitec.json
+  taskId?: string;      // Cron task identifier
+}
+
+interface ArkitecConfig {
+  period: string;       // Cron schedule (e.g., "0 */6 * * *")
+  command: string;      // Command to execute
+  logPath?: string;     // Optional log file path
+}
+```
+</CodeGroup>
+
+---
+
+### unregisterProject
+
+Unregisters a project and stops its cron task.
+
+<ParamField path="directory" type="string" required>
+  Absolute path to the project directory
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ScanError` - Project not found in registry
+
+**Behavior:**
+- Removes the cron task if one exists
+- Removes the project from the registry
+- Regenerates organization files
+- Emits a `registry.updated` event with reason `"unregister"`
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.unregisterProject(
+  "/home/user/projects/my-agent"
+);
+
+if (result.success) {
+  console.log("Project unregistered successfully");
+}
+```
+</CodeGroup>
+
+---
+
+### refreshWorkspace
+
+Clears all registered projects and performs a fresh scan.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="number">
+  The number of projects registered after the refresh
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Behavior:**
+- Stops and removes all existing cron tasks
+- Clears the project registry
+- Performs a new scan and registration
+- Regenerates organization files
+- Emits a `registry.updated` event with reason `"workspace.refresh"`
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.refreshWorkspace();
+
+if (result.success) {
+  console.log(`Workspace refreshed. ${result.data} projects found.`);
+}
+```
+</CodeGroup>
+
+---
+
+### getRegisteredProjects
+
+Returns all currently registered projects.
+
+<ResponseField name="return" type="ProjectConfig[]">
+  Array of all registered project configurations
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const projects = inspectorService.getRegisteredProjects();
+
+console.log(`Total projects: ${projects.length}`);
+
+for (const project of projects) {
+  console.log(`- ${project.id} at ${project.path}`);
+  console.log(`  Schedule: ${project.config.period}`);
+  console.log(`  Command: ${project.config.command}`);
+}
+```
+</CodeGroup>
+
+---
+
+### getProject
+
+Retrrieves a specific project by directory path.
+
+<ParamField path="directory" type="string" required>
+  The project directory path (absolute or relative)
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="ProjectConfig">
+  The project configuration
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ScanError` - Project not found at the specified directory
+
+<CodeGroup>
+```typescript Example
+const result = inspectorService.getProject("/home/user/projects/my-agent");
+
+if (result.success) {
+  console.log(`Found: ${result.data.id}`);
+} else {
+  console.error(`Not found: ${result.error.message}`);
+}
+```
+</CodeGroup>
+
+---
+
+### invokeProjectNow
+
+Immediately executes a project's scheduled task.
+
+<ParamField path="directory" type="string" required>
+  The project directory path
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ScanError` - Project not found or multiple matches
+- `RegistrationError` - Project has no task ID or failed to start/run
+
+**Behavior:**
+- Resolves the project by directory (supports relative paths, project IDs, and partial paths)
+- Starts the cron task if not already running
+- Triggers immediate execution of the task
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.invokeProjectNow(
+  "/home/user/projects/my-agent"
+);
+
+if (result.success) {
+  console.log("Task started successfully");
+} else {
+  console.error(`Failed: ${result.error.message}`);
+}
+```
+
+```typescript Flexible Path Resolution
+// All of these can work:
+await inspectorService.invokeProjectNow("/absolute/path/to/project");
+await inspectorService.invokeProjectNow("relative/path");
+await inspectorService.invokeProjectNow("my-agent");
+```
+</CodeGroup>
+
+---
+
+### stopProjectNow
+
+Stops a project's scheduled task.
+
+<ParamField path="directory" type="string" required>
+  The project directory path
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ScanError` - Project not found or multiple matches
+- `RegistrationError` - Project has no task ID or failed to stop
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.stopProjectNow(
+  "/home/user/projects/my-agent"
+);
+
+if (result.success) {
+  console.log("Task stopped successfully");
+}
+```
+</CodeGroup>
+
+---
+
+### getProjectStatus
+
+Retrieves the current status of a project's scheduled task.
+
+<ParamField path="directory" type="string" required>
+  The project directory path
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="ProjectStatus">
+  The project status information
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `ScanError` - Project not found
+- `RegistrationError` - Failed to retrieve task status
+
+<CodeGroup>
+```typescript Example
+const result = await inspectorService.getProjectStatus(
+  "/home/user/projects/my-agent"
+);
+
+if (result.success) {
+  console.log(`Project: ${result.data.projectId}`);
+  console.log(`Task ID: ${result.data.taskId}`);
+  console.log(`Running: ${result.data.isRunning}`);
+}
+```
+
+```typescript ProjectStatus Type
+interface ProjectStatus {
+  projectId: string;
+  taskId: string;
+  isRunning: boolean;
+}
+```
+</CodeGroup>
+
+---
+
+### getOrganization
+
+Returns the hierarchical organization structure of all registered agents.
+
+<ResponseField name="return" type="Promise<AgentNode[]>">
+  Array of root-level agent nodes with nested sub-agents
+</ResponseField>
+
+**Behavior:**
+- Reads agent cards from all registered projects
+- Builds a tree structure based on directory nesting
+- Parent-child relationships are determined by filesystem hierarchy
+
+<CodeGroup>
+```typescript Example
+const organization = await inspectorService.getOrganization();
+
+for (const agent of organization) {
+  console.log(`Agent: ${agent.name}`);
+  console.log(`  Email: ${agent.email || "N/A"}`);
+  console.log(`  Skills: ${agent.skills.length}`);
+  console.log(`  Sub-agents: ${agent.subAgents.length}`);
+  
+  for (const subAgent of agent.subAgents) {
+    console.log(`    - ${subAgent.name}`);
+  }
+}
+```
+
+```typescript AgentNode Type
+interface AgentNode {
+  name: string;
+  email?: string;
+  directory: string;
+  skills: AgentSkill[];
+  subAgents: AgentNode[];
+}
+
+interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+}
+```
+</CodeGroup>
+
+---
+
+### setupChangeSubscriptions
+
+Sets up subscriptions to workspace change events for automatic project management.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="error" type="RegistryError">
+  Error details if the operation failed
+</ResponseField>
+
+**Behavior:**
+- Subscribes to `workspace.root.changed` events to trigger full workspace refresh
+- Subscribes to `filesystem.changed` events to detect `arkitec.json` changes
+- Subscribes to `agent.card.updated` events to regenerate organization files
+- Automatically registers/unregisters projects when config files are added/removed
+- Reschedules tasks when project configurations change
+
+<CodeGroup>
+```typescript Example
+const result = inspectorService.setupChangeSubscriptions();
+
+if (result.success) {
+  console.log("Auto-discovery and sync enabled");
+}
+```
+</CodeGroup>
+
+---
+
+## Events Published
+
+The service publishes the following events via `ChangesService`:
+
+### registry.updated
+
+Published when the project registry changes.
+
+```typescript
+{
+  kind: "registry.updated",
+  reason: "scan" | "register" | "unregister" | "reschedule" | "workspace.refresh",
+  directory?: string,
+  projectCount: number,
+  timestamp: number
+}
+```
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Full Workflow
+import { inject, injectable } from "tsyringe";
+import { InspectorService } from "@/main/services/inspector/inspector.service";
+
+@injectable()
+export class ProjectManager {
+  constructor(
+    @inject(InspectorService) private readonly inspector: InspectorService
+  ) {}
+
+  async initialize() {
+    // Set up auto-discovery
+    const setupResult = this.inspector.setupChangeSubscriptions();
+    if (!setupResult.success) {
+      throw new Error("Failed to setup change subscriptions");
+    }
+
+    // Scan for existing projects
+    const scanResult = await this.inspector.scanAndRegister();
+    if (scanResult.success) {
+      console.log(`Discovered ${scanResult.data} projects`);
+    }
+  }
+
+  async listProjects() {
+    const projects = this.inspector.getRegisteredProjects();
+    
+    for (const project of projects) {
+      const statusResult = await this.inspector.getProjectStatus(
+        project.path
+      );
+      
+      if (statusResult.success) {
+        console.log(`${project.id}: ${statusResult.data.isRunning ? "Running" : "Stopped"}`);
+      }
+    }
+  }
+
+  async startAllProjects() {
+    const projects = this.inspector.getRegisteredProjects();
+    
+    for (const project of projects) {
+      const result = await this.inspector.invokeProjectNow(project.path);
+      if (!result.success) {
+        console.error(`Failed to start ${project.id}: ${result.error.message}`);
+      }
+    }
+  }
+
+  async viewOrganization() {
+    const org = await this.inspector.getOrganization();
+    
+    const printNode = (node: AgentNode, indent = 0) => {
+      const prefix = "  ".repeat(indent);
+      console.log(`${prefix}${node.name} (${node.skills.length} skills)`);
+      for (const sub of node.subAgents) {
+        printNode(sub, indent + 1);
+      }
+    };
+    
+    for (const root of org) {
+      printNode(root);
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Error Handling
+
+All async methods return a `Result<T, E>` type:
+
+```typescript
+const result = await inspectorService.registerProject(directory);
+
+if (result.success) {
+  const project = result.data;
+} else {
+  console.error(`Error [${result.error.code}]: ${result.error.message}`);
+}
+```
+
+### Common Error Codes
+
+- `ScanError` - Failed to scan directory, project not found, or path resolution failed
+- `ParseError` - Failed to parse `arkitec.json`
+- `RegistrationError` - Failed to schedule or manage cron tasks
+- `AlreadyRegisteredError` - Project is already registered

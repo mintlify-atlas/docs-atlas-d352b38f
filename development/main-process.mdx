@@ -1,0 +1,456 @@
+---
+title: Main Process
+description: Understanding Arkitec's main process architecture, services, and lifecycle
+---
+
+## Overview
+
+The main process runs in Node.js and manages the entire application lifecycle. It handles:
+
+- Window and application lifecycle
+- File system and native OS operations
+- MCP server connections and agent orchestration
+- Business logic and state management
+- RPC endpoints for renderer communication
+
+## Application Bootstrap
+
+The main process initializes in a specific sequence to ensure all dependencies are ready.
+
+### Entry Point
+
+```typescript
+// src/index.ts
+import "reflect-metadata";  // Required for TSyringe decorators
+import { app, BrowserWindow } from "electron";
+import { registerRpcIpcHandlers } from "@/main/lib/rpc/router/register";
+import { appContainer } from "@main/app.container";
+import { AuthService } from "@main/services/auth/auth.service";
+import { BootstrapService } from "@main/services/bootstrap/bootstrap.service";
+
+// 1. Setup auth before app is ready (required by better-auth)
+appContainer.resolve(AuthService).setupMain();
+
+// 2. Register RPC handlers and create window when ready
+app.on("ready", () => {
+  registerRpcIpcHandlers();
+  createWindow();
+
+  // 3. Bootstrap all services
+  const bootstrap = appContainer.resolve(BootstrapService);
+  bootstrap.start().catch((error) => {
+    console.error(`Bootstrap failed: ${error.message}`);
+  });
+});
+```
+
+### Bootstrap Sequence
+
+<Steps>
+  <Step title="Reflect Metadata">
+    Import `reflect-metadata` to enable TypeScript decorators for dependency injection
+  </Step>
+  <Step title="Auth Setup">
+    Initialize authentication system before Electron app is ready
+  </Step>
+  <Step title="App Ready">
+    Wait for Electron's `ready` event
+  </Step>
+  <Step title="RPC Registration">
+    Register all IPC handlers for renderer communication
+  </Step>
+  <Step title="Window Creation">
+    Create the main BrowserWindow with security settings
+  </Step>
+  <Step title="Service Bootstrap">
+    Initialize all services in dependency order
+  </Step>
+</Steps>
+
+### Window Configuration
+
+```typescript
+// src/index.ts:29-48
+const createWindow = (): void => {
+  const mainWindow = new BrowserWindow({
+    height: 900,
+    width: 1400,
+    minHeight: 720,
+    minWidth: 1100,
+    webPreferences: {
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+
+  if (!app.isPackaged && process.env.ARKITEC_OPEN_DEVTOOLS === "1") {
+    mainWindow.webContents.openDevTools({ mode: "detach" });
+  }
+};
+```
+
+<Warning>
+Never enable `nodeIntegration` or disable `contextIsolation`. These settings are critical for security.
+</Warning>
+
+## Service Architecture
+
+Services are the core building blocks of the main process. Each service encapsulates domain logic and dependencies.
+
+### Service Implementation
+
+Services use TypeScript decorators for dependency injection:
+
+<CodeGroup>
+```typescript Service Class
+// src/main/services/agent/agent.service.ts
+import { injectable, inject } from "tsyringe";
+
+@injectable()
+export class AgentService implements Bootstrappable {
+  private dbCache = new Map<string, AgentCardDb>();
+  private unsubscribeFromChanges: (() => void) | null = null;
+
+  constructor(
+    @inject(FileSystemService) private readonly fss: FileSystemService,
+    @inject(PathsService) private readonly paths: PathsService,
+    @inject(SkillsService) private readonly skills: SkillsService,
+    @inject(ChangesService) private readonly changes: ChangesService,
+  ) {}
+
+  // Lifecycle hook called during bootstrap
+  onInit(): Result<void, string> {
+    const result = this.setupChangeSubscriptions();
+    if (!result.success) {
+      return r.fail("WatcherSetupError", result.error.message);
+    }
+    return r.success(undefined);
+  }
+
+  async createAgent(
+    directory: string,
+    name: string,
+  ): Promise<Result<FileMutationResult, AgentError>> {
+    // Validate directory
+    if (directory.includes(".arkitec")) {
+      return r.fail(
+        AgentErrors.DirectoryCreationError,
+        "Agent cannot be created inside .arkitec folder"
+      );
+    }
+
+    // Create directory
+    const mkdirResult = await this.fss.mkdir(directory, false);
+    if (!mkdirResult.success) return mkdirResult;
+
+    // Initialize agent card
+    const card = buildDefaultAgentCard(name);
+    const adapter = new JSONFile<AgentCard>(cardPath);
+    const db = new Low<AgentCard>(adapter, card);
+    await db.write();
+
+    return r.success(directory);
+  }
+}
+```
+
+```typescript Container Registration
+// src/main/services/agent/agent.container.ts
+import { AgentService } from "./agent.service";
+import { AgentRpcController } from "./agent.rpc";
+
+export const agentDeps = {
+  AgentService,
+  AgentRpcController,
+} as const;
+```
+</CodeGroup>
+
+### Dependency Injection Patterns
+
+<Tabs>
+  <Tab title="Constructor Injection">
+    ```typescript
+    @injectable()
+    export class MyService {
+      constructor(
+        @inject(DependencyA) private readonly depA: DependencyA,
+        @inject(DependencyB) private readonly depB: DependencyB,
+      ) {}
+    }
+    ```
+    Preferred pattern - dependencies are explicit and immutable
+  </Tab>
+  <Tab title="Container Resolution">
+    ```typescript
+    // In application bootstrap code
+    const service = appContainer.resolve(MyService);
+    service.doSomething();
+    ```
+    Used in entry points and bootstrap code
+  </Tab>
+  <Tab title="Singleton Lifecycle">
+    ```typescript
+    // All services registered as singletons
+    scopedContainer.registerSingleton(ServiceClass);
+    ```
+    Same instance reused throughout app lifecycle
+  </Tab>
+</Tabs>
+
+## Service Lifecycle
+
+Services can implement the `Bootstrappable` interface to hook into application startup:
+
+```typescript
+export interface Bootstrappable {
+  onInit?(): Result<void, string> | Promise<Result<void, string>>;
+}
+```
+
+### Bootstrap Service
+
+```typescript
+// src/main/services/bootstrap/bootstrap.service.ts
+@injectable()
+export class BootstrapService {
+  constructor(
+    @inject(McpService) private readonly mcp: McpService,
+    @inject(MemoryMcp) private readonly memoryMcp: MemoryMcp,
+    @inject(InspectorService) private readonly inspector: InspectorService,
+    @inject(WatcherService) private readonly watcher: WatcherService,
+    @inject(AgentService) private readonly agents: AgentService,
+  ) {}
+
+  async start(): Promise<void> {
+    console.log("[BootstrapService] Starting...");
+
+    const services: Bootstrappable[] = [
+      this.mcp,
+      this.memoryMcp,
+      this.inspector,
+      this.agents,
+      this.watcher,
+    ];
+
+    // Initialize services in order
+    for (const service of services) {
+      if (service.onInit) {
+        const result = await service.onInit();
+        if (!result.success) {
+          console.error(
+            `[BootstrapService] Service init failed: ${result.error}`
+          );
+        }
+      }
+    }
+
+    console.log("[BootstrapService] Bootstrap completed");
+  }
+}
+```
+
+<Info>
+Services are initialized **sequentially** to ensure dependencies are ready. If a service fails to initialize, the error is logged but other services continue.
+</Info>
+
+## Error Handling
+
+Arkitec uses a Result pattern for explicit error handling:
+
+### Result Type
+
+```typescript
+type Result<T, E> = 
+  | { success: true; data: T }
+  | { success: false; error: E };
+
+// Helper functions
+const r = {
+  success: <T>(data: T): Result<T, never> => ({ success: true, data }),
+  fail: <E>(type: string, message: string): Result<never, E> => ({
+    success: false,
+    error: { type, message } as E,
+  }),
+};
+```
+
+### Error Handling Pattern
+
+<CodeGroup>
+```typescript Service Layer
+// Service methods return Result
+async getAgentCard(
+  directory: string,
+): Promise<Result<AgentCard, AgentError>> {
+  const dbResult = await this.getCardDb(directory);
+  if (!dbResult.success) return dbResult;
+
+  const db = dbResult.data;
+
+  const parseResult = AgentCardSchema.safeParse(db.data);
+  if (!parseResult.success) {
+    return r.fail(
+      AgentErrors.AgentCardValidationError,
+      parseResult.error.message,
+    );
+  }
+
+  return r.success(parseResult.data);
+}
+```
+
+```typescript RPC Layer
+// RPC controllers throw errors for renderer
+@invokable()
+async getAgentCard(ctx: RpcContext, directory: string): Promise<AgentCard> {
+  const result = await this.agentService.getAgentCard(directory);
+  if (!result.success) {
+    throw new Error(`${result.error.type}: ${result.error.message}`);
+  }
+  return result.data;
+}
+```
+</CodeGroup>
+
+### Domain-Specific Errors
+
+```typescript
+// src/main/services/agent/agent.errors.ts
+export const AgentErrors = {
+  AgentCardNotFoundError: "AgentCardNotFoundError",
+  AgentCardValidationError: "AgentCardValidationError",
+  DirectoryCreationError: "DirectoryCreationError",
+  FileWriteError: "FileWriteError",
+  SkillAlreadyExistsError: "SkillAlreadyExistsError",
+  SkillNotFoundError: "SkillNotFoundError",
+} as const;
+
+export type AgentError = {
+  type: typeof AgentErrors[keyof typeof AgentErrors];
+  message: string;
+};
+```
+
+## State Management
+
+Services maintain state through:
+
+<Tabs>
+  <Tab title="In-Memory State">
+    ```typescript
+    @injectable()
+    export class AgentService {
+      private dbCache = new Map<string, AgentCardDb>();
+      private pendingSyncs = new Set<string>();
+    }
+    ```
+    Fast access, lost on restart
+  </Tab>
+  <Tab title="Persistent Storage">
+    ```typescript
+    import { Low } from "lowdb";
+    import { JSONFile } from "lowdb/node";
+
+    const adapter = new JSONFile<AgentCard>(cardPath);
+    const db = new Low<AgentCard>(adapter, defaultCard);
+    await db.read();  // Load from disk
+    await db.write(); // Save to disk
+    ```
+    Survives restarts, slower access
+  </Tab>
+  <Tab title="Event Bus">
+    ```typescript
+    // Publish changes to subscribers
+    this.changes.publish({
+      kind: "agent.card.updated",
+      directory,
+      timestamp: Date.now(),
+    });
+
+    // Subscribe to changes
+    this.changes.subscribe((event) => {
+      this.onWorkspaceEvent(event);
+    });
+    ```
+    Reactive updates across services
+  </Tab>
+</Tabs>
+
+## Service Communication
+
+Services communicate with each other through direct method calls (via DI) and an event bus for reactive updates:
+
+```typescript
+// src/main/services/agent/agent.service.ts
+private setupChangeSubscriptions(): Result<void, AgentError> {
+  this.unsubscribeFromChanges?.();
+
+  this.unsubscribeFromChanges = this.changes.subscribe((event) => {
+    this.onWorkspaceEvent(event);
+  });
+
+  console.log("[AgentService] Change-bus watcher subscribed");
+  return r.success(undefined);
+}
+
+private onWorkspaceEvent(event: WorkspaceChangeEvent): void {
+  if (event.kind !== "filesystem.changed") return;
+
+  const agentMatch = event.path.match(/^\.agents\/([^/]+)\//);
+  if (!agentMatch) return;
+
+  const directory = `.agents/${agentMatch[1]}`;
+  void this.syncAgentSkills(directory);
+}
+```
+
+## Testing Services
+
+Dependency injection makes services testable:
+
+```typescript
+import { container } from "tsyringe";
+
+describe("AgentService", () => {
+  let service: AgentService;
+  let mockFss: jest.Mocked<FileSystemService>;
+
+  beforeEach(() => {
+    // Create mocks
+    mockFss = {
+      mkdir: jest.fn(),
+      readFile: jest.fn(),
+    } as any;
+
+    // Register mocks
+    container.registerInstance(FileSystemService, mockFss);
+    
+    // Resolve service with mocks
+    service = container.resolve(AgentService);
+  });
+
+  it("should create agent directory", async () => {
+    mockFss.mkdir.mockResolvedValue(r.success("/path"));
+    
+    const result = await service.createAgent(".agents/test", "Test");
+    
+    expect(result.success).toBe(true);
+    expect(mockFss.mkdir).toHaveBeenCalled();
+  });
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="RPC Communication" icon="arrow-right-arrow-left" href="/development/rpc-communication">
+    Learn how services expose methods to the renderer
+  </Card>
+  <Card title="Renderer Process" icon="browser" href="/development/renderer-process">
+    Understand the React frontend architecture
+  </Card>
+</CardGroup>

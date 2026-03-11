@@ -1,80 +1,408 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with Arkitec in minutes - from authentication to creating your first agent card
 ---
 
-## Get started in three steps
+This guide will walk you through your first session with Arkitec, from authentication to creating and visualizing agent cards.
 
-Get your documentation site running locally and make your first customization.
+## Overview
 
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+By the end of this quickstart, you'll have:
+- ✅ Authenticated with your Arkitec account
+- ✅ Opened a workspace folder
+- ✅ Created your first agent card
+- ✅ Viewed your organization structure
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+Make sure you've [installed Arkitec](/installation) before continuing with this guide.
 </Note>
+
+## Authentication
+
+Arkitec uses Better Auth with browser-based OAuth for secure authentication. The app supports both automatic deep-linking and manual code entry.
+
+<Steps>
+  <Step title="Launch Arkitec">
+    When you first open Arkitec, you'll see the authentication screen with these options:
+    - **Sign in with browser** - Opens your default browser
+    - **Continue with Google** - Uses Google OAuth
+    - **Paste authorization code** - Manual fallback option
+  </Step>
+
+  <Step title="Sign in with Browser (Recommended)">
+    Click **"Sign in with browser"** or **"Continue with Google"**:
+
+    ```typescript
+    // The app will open your browser to the sign-in URL
+    // using the com.arkitec.app:// protocol for callback
+    window.requestAuth()
+    ```
+
+    This will:
+    1. Open your default browser
+    2. Navigate to the authentication page
+    3. Complete the OAuth flow with PKCE
+    4. Redirect back to Arkitec via the `com.arkitec.app://` protocol
+
+    <Note>
+    The deep-link callback is automatically configured during installation. Your browser should reopen Arkitec after successful authentication.
+    </Note>
+  </Step>
+
+  <Step title="Fallback: Manual Code Entry">
+    If the deep-link doesn't work (some Linux configurations), use manual code entry:
+
+    1. Click **"Sign in with browser"** to start the auth flow
+    2. Complete authentication in your browser
+    3. Copy the **32-character authorization code** shown on the success page
+    4. Return to Arkitec and paste the code into the input field
+    5. Click **"Authenticate code"**
+
+    ```typescript
+    // Manual authentication with code
+    window.authenticate({ token: "your-32-char-code-here" })
+    ```
+
+    <Warning>
+    The authorization code is short-lived and can only be used once. You must click "Sign in with browser" first to initialize the authentication session before entering a code.
+    </Warning>
+  </Step>
+
+  <Step title="Authentication Complete">
+    Once authenticated, the app state will automatically update:
+
+    ```typescript
+    // App status transitions from "unauthenticated" to "authenticated"
+    // The Workbench component is rendered
+    switch (status) {
+      case "authenticated":
+        return <Workbench />;
+    }
+    ```
+
+    You'll now see the main Arkitec interface with:
+    - **Explorer panel** (left) - File tree navigation
+    - **Editor panel** (center/right) - Content viewer and organization flow
+    - **Navbar** (top) - User info and settings
+  </Step>
+</Steps>
+
+## Opening a Workspace
+
+<Steps>
+  <Step title="Open a Folder">
+    The first time you launch Arkitec after authentication, you'll see an empty state:
+
+    ```
+    No folder open
+    Open a folder to start exploring your project.
+    ```
+
+    Use the file menu or explorer to open a folder containing your agent projects.
+  </Step>
+
+  <Step title="File System Watching">
+    Once opened, Arkitec automatically watches your workspace for changes:
+
+    ```typescript
+    // Automatic file system watching is enabled
+    useFileSystemWatch();
+    ```
+
+    Any changes to files in your workspace will be reflected in real-time in the explorer panel.
+  </Step>
+
+  <Step title="Explore the File Tree">
+    The explorer panel shows your workspace structure:
+    - Navigate folders by clicking the expand/collapse icons
+    - Right-click items for context menu actions
+    - View files in the editor by clicking them
+  </Step>
+</Steps>
+
+## Creating an Agent Card
+
+Agent cards are JSON files that describe A2A (Agent-to-Agent) agents according to the A2A protocol specification.
+
+<Steps>
+  <Step title="Create New Agent Card">
+    In the explorer panel, right-click on a folder and select **"New Agent"**:
+
+    ```typescript
+    // This creates a new agent.card.json file
+    onCreateAgent(node.path)
+    ```
+
+    The action button is available on all folders in the file tree.
+  </Step>
+
+  <Step title="Agent Card Structure">
+    A new agent card is created with this default structure:
+
+    ```json
+    {
+      "name": "My Agent",
+      "description": "",
+      "version": "1.0.0",
+      "capabilities": {},
+      "defaultInputModes": ["sentury/network"],
+      "defaultOutputModes": ["sentury/network"],
+      "skills": [],
+      "supportedInterfaces": []
+    }
+    ```
+
+    <Note>
+    Agent cards follow the A2A protocol specification from `https://a2a-protocol.org/schemas/agent-card.json`
+    </Note>
+  </Step>
+
+  <Step title="Edit Agent Properties">
+    Click the newly created `agent.card.json` file to open it in the editor. You can configure:
+
+    **Basic Information:**
+    - `name` - Human-readable name for the agent
+    - `description` - Detailed description of the agent's purpose
+    - `version` - Semantic version (e.g., "1.0.0")
+    - `email` - Contact email (optional)
+
+    **Capabilities:**
+    ```json
+    "capabilities": {
+      "streaming": true,
+      "pushNotifications": false,
+      "extendedAgentCard": false
+    }
+    ```
+
+    **Skills:**
+    Each skill represents an ability of the agent:
+    ```json
+    "skills": [
+      {
+        "id": "recipe-search",
+        "name": "Recipe Search",
+        "description": "Search for recipes based on ingredients",
+        "tags": ["cooking", "recipes", "search"]
+      }
+    ]
+    ```
+
+    **Interfaces:**
+    Define how to communicate with the agent:
+    ```json
+    "supportedInterfaces": [
+      {
+        "url": "https://api.example.com/a2a/v1",
+        "protocolBinding": "JSONRPC",
+        "protocolVersion": "1.0"
+      }
+    ]
+    ```
+  </Step>
+
+  <Step title="Save Your Changes">
+    The file is automatically saved as you edit. Changes are immediately reflected in:
+    - The file system
+    - The organization flow visualization
+    - Any connected agents or services
+  </Step>
+</Steps>
+
+## Viewing Your Organization
+
+Arkitec provides a visual representation of your agent organization using React Flow.
+
+<Steps>
+  <Step title="Access Organization View">
+    With a workspace open, the organization flow is automatically displayed in the welcome screen:
+
+    ```typescript
+    // Organization flow shows when a workspace is open
+    if (rootPath) return <OrgFlow />;
+    ```
+
+    The flow view shows:
+    - All agent cards in your workspace
+    - Connections between agents
+    - Agent metadata and status
+  </Step>
+
+  <Step title="Navigate the Flow">
+    The organization flow is interactive:
+    - **Zoom** using mouse wheel or trackpad
+    - **Pan** by clicking and dragging the background
+    - **Select nodes** to view agent details
+    - **Auto-fit** automatically adjusts the view to show all agents
+
+    ```typescript
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      fitView
+      fitViewOptions={{ padding: 0.2 }}
+    />
+    ```
+  </Step>
+
+  <Step title="Understanding the Visualization">
+    The flow diagram shows:
+    - **Agent Nodes** - Each agent card in your workspace
+    - **Edges** - Connections and relationships between agents
+    - **Background Grid** - Helps with spatial organization
+
+    The visualization automatically updates when you:
+    - Create new agent cards
+    - Modify existing agents
+    - Change agent relationships
+  </Step>
+</Steps>
+
+## Example: Complete Agent Card
+
+Here's a complete example of an agent card for a recipe assistance agent:
+
+```json
+{
+  "name": "Recipe Assistant",
+  "description": "Agent that helps users find recipes, plan meals, and provide cooking instructions.",
+  "version": "1.0.0",
+  "email": "support@example.com",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "extendedAgentCard": false
+  },
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["text/plain", "text/html"],
+  "skills": [
+    {
+      "id": "recipe-search",
+      "name": "Recipe Search",
+      "description": "Search for recipes based on ingredients, cuisine, or dietary restrictions",
+      "tags": ["search", "recipes", "ingredients"]
+    },
+    {
+      "id": "meal-planning",
+      "name": "Meal Planning",
+      "description": "Create weekly meal plans based on preferences and nutritional goals",
+      "tags": ["planning", "nutrition", "meals"]
+    },
+    {
+      "id": "cooking-instructions",
+      "name": "Cooking Instructions",
+      "description": "Provide step-by-step cooking instructions and techniques",
+      "tags": ["cooking", "instructions", "techniques"]
+    }
+  ],
+  "supportedInterfaces": [
+    {
+      "url": "https://api.recipe-agent.example.com/a2a/v1",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ]
+}
+```
+
+## Authentication State Management
+
+Arkitec manages three authentication states throughout your session:
+
+<CodeGroup>
+```typescript Loading State
+// Initial state while checking for existing session
+case "loading":
+  return <AuthLoading />;
+```
+
+```typescript Unauthenticated State
+// No valid session, show authentication screen
+case "unauthenticated":
+  return <Auth />;
+```
+
+```typescript Authenticated State
+// Valid session, show main workbench
+case "authenticated":
+  return <Workbench />;
+```
+</CodeGroup>
+
+The app automatically handles:
+- Session persistence across restarts
+- Session validation with the auth server
+- Token refresh when needed
+- Sign-out and session cleanup
+
+## Next Steps
+
+Now that you've completed the quickstart, you can:
+
+- **Create Multiple Agents** - Build a network of specialized agents
+- **Define Agent Relationships** - Connect agents to create workflows
+- **Configure Security** - Add authentication and authorization to your agents
+- **Deploy Agents** - Package and distribute your agent cards
+- **Monitor Organization** - Use the flow view to visualize agent interactions
+
+## Keyboard Shortcuts
+
+| Action | Shortcut |
+|--------|----------|
+| Open DevTools (development) | `Cmd/Ctrl + Shift + I` |
+| Zoom in flow view | `Mouse wheel up` |
+| Zoom out flow view | `Mouse wheel down` |
+| Pan flow view | `Click + Drag` |
+| Fit view to content | Automatic on load |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Authentication deep-link not working">
+    If the browser doesn't redirect back to Arkitec after authentication:
+
+    1. The protocol handler may not be registered correctly
+    2. Use the manual code entry fallback method
+    3. On Linux, check your desktop environment's protocol handler settings
+
+    See [Installation - Troubleshooting](/installation#troubleshooting) for more details.
+  </Accordion>
+
+  <Accordion title="Organization flow not showing agents">
+    If your agents aren't appearing in the organization view:
+
+    1. Ensure agent card files are named `agent.card.json` or `*.agent.json`
+    2. Verify the JSON syntax is valid
+    3. Check that the agent card follows the A2A schema
+    4. Refresh the workspace by reopening the folder
+  </Accordion>
+
+  <Accordion title="File changes not reflected">
+    If edits aren't showing up immediately:
+
+    1. Check that file system watching is active (look for console messages)
+    2. Verify file permissions allow Arkitec to read the directory
+    3. Try closing and reopening the workspace
+    4. On some systems, external file changes may take a few seconds to propagate
+  </Accordion>
+
+  <Accordion title="Can't create agent card">
+    If the "New Agent" action isn't available:
+
+    1. Ensure you're right-clicking on a folder (not a file)
+    2. Verify you have write permissions in the workspace
+    3. Check that the workspace is properly initialized
+  </Accordion>
+</AccordionGroup>
+
+## Architecture Notes
+
+For developers interested in how Arkitec works under the hood:
+
+- **Main Process** (`src/index.ts`) - Handles app lifecycle, IPC, and services
+- **Renderer Process** (`src/renderer/app/app.tsx`) - React UI and state management
+- **Authentication** (`src/main/services/auth/`) - Better Auth integration with Electron
+- **File System** - Uses `chokidar` for cross-platform file watching
+- **Organization Flow** - Built with `@xyflow/react` for interactive visualizations
+
+For more technical details, see the [ELECTRON_AUTH_FLOW.md](https://github.com/your-org/arkitec/blob/main/ELECTRON_AUTH_FLOW.md) in the source repository.

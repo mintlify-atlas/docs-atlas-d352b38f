@@ -1,0 +1,489 @@
+---
+title: Project Registry
+description: Automatic project scanning, registration, and organization hierarchy management
+---
+
+The Project Registry (Inspector Service) is Arkitec's system for discovering, registering, and managing Arkitec projects within your workspace. It automatically scans your workspace for projects, schedules their tasks, and generates an organization hierarchy.
+
+## What is an Arkitec Project?
+
+An Arkitec project is any directory containing an `ark.config.json` file. This configuration file defines:
+
+- **Command**: The command to execute (as an array of arguments)
+- **Period**: A cron schedule for when to run the command
+- **Log path** (optional): Where to write command output
+
+```json
+{
+  "command": ["npm", "run", "build"],
+  "period": "0 */2 * * *",
+  "logPath": ".arkitec/logs/build.log"
+}
+```
+
+## How Project Discovery Works
+
+<Steps>
+  <Step title="Workspace Scan">
+    When Arkitec starts or you open a new workspace folder, it scans the entire directory tree for `ark.config.json` files.
+  </Step>
+  
+  <Step title="Project Registration">
+    For each discovered project:
+    - Parse and validate the `ark.config.json`
+    - Create a unique task ID
+    - Schedule the cron job based on the period
+    - Add the project to the registry
+  </Step>
+  
+  <Step title="Organization Generation">
+    Build a hierarchical organization tree based on project locations and their agent cards, then write `org.json` files to each project.
+  </Step>
+  
+  <Step title="Watch for Changes">
+    Subscribe to filesystem changes to detect new, modified, or deleted `ark.config.json` files.
+  </Step>
+</Steps>
+
+## Scanning Projects
+
+The scanner recursively traverses your workspace tree to find all Arkitec projects:
+
+```typescript
+import { findArkitecProjects } from './utils/scanner';
+
+const tree = await fss.listTree();
+const rootPath = await fss.getRootPath();
+
+const projectPaths = await findArkitecProjects(tree, rootPath);
+// Returns: ['.agents/agent-1', 'projects/backend', ...]
+```
+
+The scanner:
+- Skips ignored directories (node_modules, .git, etc.)
+- Checks each directory for `ark.config.json`
+- Returns relative paths from the workspace root
+
+## Registering Projects
+
+When a project is registered, Arkitec:
+
+1. **Validates the config** - Ensures `command` and `period` are present and valid
+2. **Creates a task ID** - Generates a unique identifier like `arkitec-my-project-1234567890`
+3. **Schedules the cron job** - Sets up the periodic task execution
+4. **Stores in registry** - Adds the project to the in-memory registry
+5. **Regenerates org files** - Updates organization hierarchy across all projects
+
+```typescript
+const result = await inspectorService.registerProject(
+  '/absolute/path/to/project'
+);
+
+if (result.success) {
+  console.log('Project ID:', result.data.id);
+  console.log('Task ID:', result.data.taskId);
+  console.log('Schedule:', result.data.config.period);
+}
+```
+
+<Warning>
+  Projects that are already registered cannot be registered again. Attempting to do so will return an `AlreadyRegisteredError`.
+</Warning>
+
+## Project Configuration
+
+### Valid Configuration
+
+```json
+{
+  "command": ["node", "scripts/sync.js"],
+  "period": "*/15 * * * *",
+  "logPath": ".arkitec/logs/sync.log"
+}
+```
+
+### Configuration Validation
+
+<Accordion title="command (required)">
+  Must be an array of strings representing the command and its arguments.
+  
+  ```json
+  // ✅ Valid
+  "command": ["npm", "run", "test"]
+  
+  // ❌ Invalid
+  "command": "npm run test"  // Must be array
+  ```
+</Accordion>
+
+<Accordion title="period (required)">
+  Must be a valid cron expression. The cron service validates the schedule before registration.
+  
+  ```json
+  // ✅ Valid
+  "period": "0 */2 * * *"    // Every 2 hours
+  "period": "*/15 * * * *"   // Every 15 minutes
+  "period": "0 9 * * 1"      // Every Monday at 9am
+  
+  // ❌ Invalid
+  "period": "invalid cron"
+  ```
+  
+  See [cron syntax](https://crontab.guru/) for valid patterns.
+</Accordion>
+
+<Accordion title="logPath (optional)">
+  Relative path from the project directory where command output will be written.
+  
+  ```json
+  "logPath": ".arkitec/logs/command.log"
+  ```
+  
+  The directory will be created automatically if it doesn't exist.
+</Accordion>
+
+## Organization Hierarchy
+
+The registry automatically generates an organization hierarchy based on:
+- Project locations (parent/child relationships)
+- Agent cards (agent names, emails, skills)
+
+### Organization Structure
+
+```typescript
+interface AgentNode {
+  name: string;           // From agent-card.json or directory name
+  email?: string;         // From agent-card.json
+  directory: string;      // Absolute path
+  skills: AgentSkill[];   // From agent-card.json
+  subAgents: AgentNode[]; // Nested agents
+}
+```
+
+### Example Hierarchy
+
+Given this project structure:
+
+```
+workspace/
+├── .agents/
+│   ├── manager/
+│   │   └── ark.config.json
+│   └── backend/
+│       └── ark.config.json
+└── projects/
+    └── frontend/
+        └── ark.config.json
+```
+
+The organization tree might look like:
+
+```json
+[
+  {
+    "name": "manager",
+    "directory": "/workspace/.agents/manager",
+    "skills": [...],
+    "subAgents": [
+      {
+        "name": "backend",
+        "directory": "/workspace/.agents/backend",
+        "skills": [...],
+        "subAgents": []
+      }
+    ]
+  },
+  {
+    "name": "frontend",
+    "directory": "/workspace/projects/frontend",
+    "skills": [...],
+    "subAgents": []
+  }
+]
+```
+
+### Organization Files
+
+The hierarchy is written to `.arkitec/org.json` in each project directory:
+
+```typescript
+workspace/.agents/manager/.arkitec/org.json
+workspace/.agents/backend/.arkitec/org.json
+workspace/projects/frontend/.arkitec/org.json
+```
+
+<Tip>
+  Organization files are regenerated automatically when:
+  - Projects are registered or unregistered
+  - Agent cards are updated
+  - The workspace is refreshed
+</Tip>
+
+## Dynamic Updates
+
+The registry watches for filesystem changes and automatically handles:
+
+### Config File Added
+
+When a new `ark.config.json` is created:
+1. Debounce to avoid duplicate processing
+2. Parse and validate the config
+3. Register the project
+4. Schedule its cron job
+5. Regenerate organization files
+6. Publish `registry.updated` event
+
+### Config File Modified
+
+When an existing `ark.config.json` is changed:
+1. Detect the change via filesystem watcher
+2. Parse the new configuration
+3. Compare with existing config
+4. If changed:
+   - Stop the old cron job
+   - Schedule a new cron job with updated schedule
+   - Update the registry
+   - Publish `registry.updated` event
+
+### Config File Deleted
+
+When `ark.config.json` is removed:
+1. Unregister the project
+2. Stop and remove its cron job
+3. Remove from registry
+4. Regenerate organization files
+5. Publish `registry.updated` event
+
+### Debouncing
+
+To avoid thrashing on rapid file changes:
+- Config events are debounced with a 200ms delay
+- Multiple changes to the same file are collapsed
+- Events are batched and processed together
+
+```typescript
+private readonly configEventDebounceMs = 200;
+private pendingConfigEvents = new Map<string, 'upsert' | 'unlink'>();
+```
+
+## Managing Projects
+
+### Get All Projects
+
+```typescript
+const projects = inspectorService.getRegisteredProjects();
+
+projects.forEach(project => {
+  console.log(`${project.id}: ${project.config.period}`);
+});
+```
+
+### Get Single Project
+
+```typescript
+const result = inspectorService.getProject('.agents/my-agent');
+
+if (result.success) {
+  console.log('Project:', result.data);
+}
+```
+
+### Unregister Project
+
+```typescript
+const result = await inspectorService.unregisterProject(
+  '.agents/my-agent'
+);
+
+if (result.success) {
+  console.log('Project unregistered and cron stopped');
+}
+```
+
+### Refresh Workspace
+
+Rescan and re-register all projects:
+
+```typescript
+const result = await inspectorService.refreshWorkspace();
+
+if (result.success) {
+  console.log(`Registered ${result.data} projects`);
+}
+```
+
+<Warning>
+  Refreshing the workspace stops all running cron jobs, clears the registry, and rescans from scratch. Use sparingly.
+</Warning>
+
+## Running Projects
+
+### Invoke Now
+
+Run a project's command immediately (in addition to its scheduled runs):
+
+```typescript
+const result = await inspectorService.invokeProjectNow(
+  '.agents/my-agent'
+);
+
+if (result.success) {
+  console.log('Project invoked immediately');
+}
+```
+
+### Stop Project
+
+Stop a project's scheduled execution:
+
+```typescript
+const result = await inspectorService.stopProjectNow(
+  '.agents/my-agent'
+);
+
+if (result.success) {
+  console.log('Cron stopped');
+}
+```
+
+### Get Status
+
+Check if a project's cron is running:
+
+```typescript
+const result = await inspectorService.getProjectStatus(
+  '.agents/my-agent'
+);
+
+if (result.success) {
+  console.log('Running:', result.data.isRunning);
+  console.log('Task ID:', result.data.taskId);
+}
+```
+
+## Change Events
+
+The registry publishes events to the change bus:
+
+<Accordion title="registry.updated">
+  Published when the registry changes (scan, register, unregister, reschedule).
+  
+  ```typescript
+  {
+    kind: 'registry.updated',
+    reason: 'register' | 'unregister' | 'scan' | 'reschedule' | 'workspace.refresh',
+    directory?: string,  // Specific project (if applicable)
+    projectCount: number,
+    timestamp: number
+  }
+  ```
+</Accordion>
+
+<Accordion title="workspace.root.changed">
+  Published when the workspace root directory changes (triggered by opening a new folder).
+  
+  ```typescript
+  {
+    kind: 'workspace.root.changed',
+    previousRootPath: string | null,
+    nextRootPath: string,
+    timestamp: number
+  }
+  ```
+</Accordion>
+
+## Command Execution
+
+When a project's cron triggers, Arkitec:
+
+1. **Spawns a child process** with the configured command
+2. **Sets working directory** to the project directory
+3. **Captures output** (stdout and stderr)
+4. **Strips ANSI codes** from output for clean logs
+5. **Writes to log file** (if `logPath` is configured)
+6. **Handles errors** gracefully without crashing the cron
+
+Example command execution:
+
+```typescript
+const result = await executor.run({
+  command: 'npm',
+  args: ['run', 'build'],
+  cwd: '/absolute/path/to/project',
+  logPath: '/absolute/path/to/project/.arkitec/logs/build.log'
+});
+
+if (result.success) {
+  console.log('Exit code:', result.data.exitCode);
+}
+```
+
+## Best Practices
+
+1. **Use absolute paths for registration** - The service expects absolute paths, not relative ones
+2. **Keep cron schedules reasonable** - Very frequent schedules can impact performance
+3. **Configure log paths** - Logs help debug failed commands
+4. **Test cron expressions** - Use [crontab.guru](https://crontab.guru/) to validate schedules
+5. **Handle long-running commands** - Ensure commands complete before the next scheduled run
+
+## Troubleshooting
+
+### Project Not Discovered
+
+If a project isn't showing up:
+1. Verify `ark.config.json` exists in the directory
+2. Check the JSON is valid (no syntax errors)
+3. Ensure the directory isn't in an ignored path (node_modules, .git)
+4. Try refreshing the workspace manually
+
+### Invalid Schedule Error
+
+If you get a schedule validation error:
+1. Test your cron expression at [crontab.guru](https://crontab.guru/)
+2. Ensure you're using 5-field cron syntax (minute hour day month weekday)
+3. Check for typos in the `period` field
+
+### Cron Not Running
+
+If your scheduled command isn't executing:
+1. Check the project status: `getProjectStatus(directory)`
+2. Verify the cron is started (not just scheduled)
+3. Check the logs for errors
+4. Test the command manually in the project directory
+
+## API Reference
+
+<Accordion title="scanAndRegister()">
+  Scans the workspace and registers all discovered projects.
+  
+  ```typescript
+  const result = await inspectorService.scanAndRegister();
+  
+  if (result.success) {
+    console.log(`Registered ${result.data} projects`);
+  }
+  ```
+</Accordion>
+
+<Accordion title="registerProject(directory, options?)">
+  Registers a single project at the specified directory.
+  
+  ```typescript
+  const result = await inspectorService.registerProject(
+    '/absolute/path',
+    { emitChange: false }  // Optional: suppress change event
+  );
+  ```
+</Accordion>
+
+<Accordion title="getOrganization()">
+  Returns the full organization hierarchy as a tree of agent nodes.
+  
+  ```typescript
+  const tree = await inspectorService.getOrganization();
+  
+  tree.forEach(agent => {
+    console.log(`${agent.name} has ${agent.subAgents.length} sub-agents`);
+  });
+  ```
+</Accordion>

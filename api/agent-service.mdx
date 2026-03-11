@@ -1,0 +1,505 @@
+---
+title: AgentService
+description: Service for managing agent cards, skills, and lifecycle operations
+---
+
+The `AgentService` manages agent cards, skills synchronization, and lifecycle operations within the Arkitec workspace. It provides methods to create agents, manage their skills, and keep agent data synchronized with the filesystem.
+
+## Injection
+
+The service is injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { AgentService } from "@/main/services/agent/agent.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(AgentService) private readonly agents: AgentService
+  ) {}
+}
+```
+
+## Public Methods
+
+### createAgent
+
+Creates a new agent with a default card and initializes agent files.
+
+<ParamField path="directory" type="string" required>
+  The relative directory path where the agent will be created (e.g., `.agents/my-agent`)
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  The display name for the agent
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The directory path where the agent was created
+</ResponseField>
+
+<ResponseField name="error" type="AgentError | FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `DirectoryCreationError` - Cannot create agent inside `.arkitec` folder or directory creation failed
+- `AgentCardNotFoundError` - Failed to determine agent card path
+- `FileWriteError` - Failed to write agent files
+
+<CodeGroup>
+```typescript Example
+const result = await agentService.createAgent(
+  ".agents/customer-support",
+  "Customer Support Agent"
+);
+
+if (result.success) {
+  console.log(`Agent created at: ${result.data}`);
+} else {
+  console.error(`Failed: ${result.error.message}`);
+}
+```
+
+```typescript Error Handling
+const result = await agentService.createAgent(
+  ".arkitec/invalid",
+  "Test Agent"
+);
+
+// Returns:
+// {
+//   success: false,
+//   error: {
+//     code: "DirectoryCreationError",
+//     message: "Agent cannot be created inside .arkitec folder"
+//   }
+// }
+```
+</CodeGroup>
+
+---
+
+### getAgentCard
+
+Retrieves and validates an agent card from the specified directory.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the agent card
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="AgentCard">
+  The validated agent card data containing name, email, description, skills, etc.
+</ResponseField>
+
+<ResponseField name="error" type="AgentError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `AgentCardNotFoundError` - Card file not found at the specified directory
+- `AgentCardValidationError` - Card data failed schema validation
+
+<CodeGroup>
+```typescript Example
+const result = await agentService.getAgentCard(".agents/support");
+
+if (result.success) {
+  console.log(`Agent: ${result.data.name}`);
+  console.log(`Skills: ${result.data.skills.length}`);
+} else {
+  console.error(`Failed: ${result.error.message}`);
+}
+```
+
+```typescript AgentCard Type
+interface AgentCard {
+  name: string;
+  email?: string;
+  description?: string;
+  skills: AgentSkill[];
+  // ... other fields
+}
+
+interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+}
+```
+</CodeGroup>
+
+---
+
+### updateAgentCard
+
+Updates an agent card with new data and triggers change events.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the agent card
+</ParamField>
+
+<ParamField path="card" type="AgentCard" required>
+  The complete agent card data to save
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="error" type="AgentError | FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `AgentCardValidationError` - Card data failed schema validation
+- `AgentCardNotFoundError` - Card file not found at the specified directory
+
+<CodeGroup>
+```typescript Example
+const cardResult = await agentService.getAgentCard(".agents/support");
+if (!cardResult.success) return;
+
+const updatedCard = {
+  ...cardResult.data,
+  name: "Updated Support Agent",
+  description: "Handles customer inquiries"
+};
+
+const result = await agentService.updateAgentCard(
+  ".agents/support",
+  updatedCard
+);
+
+if (result.success) {
+  console.log("Agent card updated successfully");
+}
+```
+</CodeGroup>
+
+---
+
+### addSkillToCard
+
+Adds a new skill to an agent card and installs the skill files.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the agent card
+</ParamField>
+
+<ParamField path="skill" type="AgentSkill" required>
+  The skill object to add
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="AgentCard">
+  The updated agent card with the new skill
+</ResponseField>
+
+<ResponseField name="error" type="AgentError | FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `SkillAlreadyExistsError` - A skill with the same ID already exists
+- `FileWriteError` - Failed to install skill files
+- `AgentCardNotFoundError` - Card file not found
+
+<CodeGroup>
+```typescript Example
+const skill = {
+  id: "data-analysis",
+  name: "Data Analysis",
+  description: "Analyzes customer data patterns",
+  tags: ["analytics", "reporting"]
+};
+
+const result = await agentService.addSkillToCard(
+  ".agents/support",
+  skill
+);
+
+if (result.success) {
+  console.log(`Skill added. Total skills: ${result.data.skills.length}`);
+}
+```
+
+```typescript Duplicate Skill
+const result = await agentService.addSkillToCard(
+  ".agents/support",
+  { id: "existing-skill", name: "...", description: "...", tags: [] }
+);
+
+// Returns:
+// {
+//   success: false,
+//   error: {
+//     code: "SkillAlreadyExistsError",
+//     message: 'Skill with id "existing-skill" already exists in agent card'
+//   }
+// }
+```
+</CodeGroup>
+
+---
+
+### removeSkillFromCard
+
+Removes a skill from an agent card and deletes the skill files.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the agent card
+</ParamField>
+
+<ParamField path="skillId" type="string" required>
+  The ID of the skill to remove
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="AgentCard">
+  The updated agent card without the removed skill
+</ResponseField>
+
+<ResponseField name="error" type="AgentError | FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `SkillNotFoundError` - No skill with the specified ID exists
+- `FileWriteError` - Failed to remove skill files
+- `AgentCardNotFoundError` - Card file not found
+
+<CodeGroup>
+```typescript Example
+const result = await agentService.removeSkillFromCard(
+  ".agents/support",
+  "data-analysis"
+);
+
+if (result.success) {
+  console.log(`Skill removed. Remaining: ${result.data.skills.length}`);
+}
+```
+</CodeGroup>
+
+---
+
+### syncAgentSkills
+
+Synchronizes the agent card with skill directories on disk. Adds new skills found on disk and removes skills that no longer exist.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the agent
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="AgentCard">
+  The synchronized agent card
+</ResponseField>
+
+<ResponseField name="error" type="AgentError | FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Behavior:**
+- Scans the `.arkitec/skills/` directory for skill folders
+- Removes skills from the card that don't have corresponding directories
+- Adds new skills found on disk with default metadata
+- Publishes `agent.card.updated` and `agent.skills.synced` events if changes were made
+
+<CodeGroup>
+```typescript Example
+// Manually trigger sync
+const result = await agentService.syncAgentSkills(".agents/support");
+
+if (result.success) {
+  console.log(`Synced. Current skills: ${result.data.skills.length}`);
+}
+```
+
+```typescript Auto-Sync
+// The service automatically syncs when filesystem changes are detected
+// in the .agents/{name}/.arkitec/skills/ directory
+```
+</CodeGroup>
+
+---
+
+### setupChangeSubscriptions
+
+Sets up subscriptions to workspace change events for automatic skill synchronization.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="error" type="AgentError">
+  Error details if the operation failed
+</ResponseField>
+
+**Behavior:**
+- Subscribes to `filesystem.changed` events
+- Automatically triggers `syncAgentSkills()` when changes occur in agent skill directories
+- Debounces multiple rapid changes to avoid excessive syncing
+
+<CodeGroup>
+```typescript Example
+// Usually called during service initialization
+const result = agentService.setupChangeSubscriptions();
+
+if (result.success) {
+  console.log("Auto-sync enabled for agent skills");
+}
+```
+</CodeGroup>
+
+---
+
+## Events Published
+
+The service publishes the following events via `ChangesService`:
+
+### agent.card.updated
+
+Published when an agent card is modified.
+
+```typescript
+{
+  kind: "agent.card.updated",
+  directory: string,
+  timestamp: number
+}
+```
+
+### agent.skills.synced
+
+Published when agent skills are synchronized with disk.
+
+```typescript
+{
+  kind: "agent.skills.synced",
+  directory: string,
+  timestamp: number
+}
+```
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Full Workflow
+import { inject, injectable } from "tsyringe";
+import { AgentService } from "@/main/services/agent/agent.service";
+
+@injectable()
+export class AgentManager {
+  constructor(
+    @inject(AgentService) private readonly agents: AgentService
+  ) {}
+
+  async setupNewAgent(name: string) {
+    // Create the agent
+    const createResult = await this.agents.createAgent(
+      `.agents/${name.toLowerCase()}`,
+      name
+    );
+    
+    if (!createResult.success) {
+      throw new Error(`Failed to create agent: ${createResult.error.message}`);
+    }
+
+    const directory = createResult.data;
+
+    // Add some skills
+    const skills = [
+      {
+        id: "email-handling",
+        name: "Email Handler",
+        description: "Processes customer emails",
+        tags: ["communication"]
+      },
+      {
+        id: "ticket-routing",
+        name: "Ticket Router",
+        description: "Routes support tickets",
+        tags: ["automation"]
+      }
+    ];
+
+    for (const skill of skills) {
+      const addResult = await this.agents.addSkillToCard(directory, skill);
+      if (!addResult.success) {
+        console.warn(`Failed to add skill: ${addResult.error.message}`);
+      }
+    }
+
+    // Get the final agent card
+    const cardResult = await this.agents.getAgentCard(directory);
+    if (cardResult.success) {
+      console.log(`Agent "${cardResult.data.name}" created with ${cardResult.data.skills.length} skills`);
+    }
+
+    return directory;
+  }
+
+  async removeSkill(directory: string, skillId: string) {
+    const result = await this.agents.removeSkillFromCard(directory, skillId);
+    
+    if (result.success) {
+      console.log(`Skill removed successfully`);
+      return result.data;
+    } else {
+      console.error(`Failed to remove skill: ${result.error.message}`);
+      return null;
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Error Handling
+
+All methods return a `Result<T, E>` type that must be checked:
+
+```typescript
+const result = await agentService.getAgentCard(directory);
+
+if (result.success) {
+  // Use result.data
+  const card = result.data;
+} else {
+  // Handle result.error
+  console.error(`Error [${result.error.code}]: ${result.error.message}`);
+}
+```
+
+### Common Error Codes
+
+- `AgentCardNotFoundError` - Agent card file does not exist
+- `AgentCardValidationError` - Card data is invalid
+- `SkillAlreadyExistsError` - Attempting to add a duplicate skill
+- `SkillNotFoundError` - Attempting to remove a non-existent skill
+- `DirectoryCreationError` - Cannot create agent directory
+- `FileWriteError` - Failed to write agent or skill files

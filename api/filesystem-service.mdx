@@ -1,0 +1,634 @@
+---
+title: FileSystemService
+description: Service for safe filesystem operations within the workspace root
+---
+
+The `FileSystemService` provides safe filesystem operations scoped to a workspace root directory. All paths are validated to ensure they remain within the workspace, preventing directory traversal attacks.
+
+## Injection
+
+The service is injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { FileSystemService } from "@/main/services/fs/fs.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(FileSystemService) private readonly fss: FileSystemService
+  ) {}
+}
+```
+
+## Public Methods
+
+### openFolder
+
+Sets the workspace root directory to a new location.
+
+<ParamField path="directory" type="string" required>
+  Absolute path to the new workspace root directory
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The resolved absolute path to the new workspace root
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Folder path is empty or invalid
+- `RootAccessError` - Cannot access or create the directory
+
+**Behavior:**
+- Resolves the path to an absolute path
+- Validates that the directory exists or can be created
+- Saves the folder path to persistent storage
+- Rolls back to the previous root if validation fails
+
+<CodeGroup>
+```typescript Example
+const result = await fss.openFolder("/home/user/projects");
+
+if (result.success) {
+  console.log(`Workspace root: ${result.data}`);
+} else {
+  console.error(`Failed: ${result.error.message}`);
+}
+```
+</CodeGroup>
+
+---
+
+### getRootPath
+
+Retrieves the current workspace root directory path.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The absolute path to the workspace root
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const result = await fss.getRootPath();
+
+if (result.success) {
+  console.log(`Current root: ${result.data}`);
+}
+```
+</CodeGroup>
+
+---
+
+### getAbsolutePath
+
+Converts a relative path to an absolute path within the workspace root.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path from the workspace root
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The absolute path
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or attempts to traverse outside the workspace root
+
+<CodeGroup>
+```typescript Example
+const result = await fss.getAbsolutePath(".agents/support");
+
+if (result.success) {
+  console.log(`Absolute path: ${result.data}`);
+  // Output: /home/user/projects/.agents/support
+}
+```
+</CodeGroup>
+
+---
+
+### listTree
+
+Returns a recursive tree structure of all files and directories in the workspace.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="FileTreeNode">
+  The root node of the file tree
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `TreeReadError` - Failed to read the directory tree
+
+<CodeGroup>
+```typescript Example
+const result = await fss.listTree();
+
+if (result.success) {
+  const printNode = (node: FileTreeNode, indent = 0) => {
+    const prefix = "  ".repeat(indent);
+    console.log(`${prefix}${node.name} ${node.type === "directory" ? "/" : ""}`);
+    
+    if (node.type === "directory" && node.children) {
+      for (const child of node.children) {
+        printNode(child, indent + 1);
+      }
+    }
+  };
+  
+  printNode(result.data);
+}
+```
+
+```typescript FileTreeNode Type
+interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: FileTreeNode[];
+}
+```
+</CodeGroup>
+
+---
+
+### readFile
+
+Reads the contents of a file.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path to the file from the workspace root
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="FileContent">
+  Object containing the file path and content
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `FileAccessError` - Cannot access the file
+- `NotAFileError` - Path points to a directory, not a file
+
+<CodeGroup>
+```typescript Example
+const result = await fss.readFile(".agents/support/.arkitec/card.json");
+
+if (result.success) {
+  console.log(`File: ${result.data.path}`);
+  console.log(`Content: ${result.data.content}`);
+} else {
+  console.error(`Failed: ${result.error.message}`);
+}
+```
+
+```typescript FileContent Type
+interface FileContent {
+  path: string;    // Relative path
+  content: string; // UTF-8 file content
+}
+```
+</CodeGroup>
+
+---
+
+### writeFile
+
+Writes content to a file, creating parent directories if needed.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path to the file from the workspace root
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  UTF-8 content to write
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The relative path to the written file
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `FileWriteError` - Failed to create directories or write the file
+
+<CodeGroup>
+```typescript Example
+const result = await fss.writeFile(
+  "logs/output.txt",
+  "Task completed successfully"
+);
+
+if (result.success) {
+  console.log(`Written to: ${result.data}`);
+}
+```
+</CodeGroup>
+
+---
+
+### appendFile
+
+Appends content to a file, creating it if it doesn't exist.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path to the file from the workspace root
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  UTF-8 content to append
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The relative path to the file
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `FileWriteError` - Failed to create directories or append to the file
+
+<CodeGroup>
+```typescript Example
+const result = await fss.appendFile(
+  "logs/activity.log",
+  `\n[${new Date().toISOString()}] Task executed`
+);
+
+if (result.success) {
+  console.log("Log entry added");
+}
+```
+</CodeGroup>
+
+---
+
+### renamePath
+
+Renames or moves a file or directory.
+
+<ParamField path="currentRelativePath" type="string" required>
+  Current relative path
+</ParamField>
+
+<ParamField path="nextRelativePath" type="string" required>
+  New relative path
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The new relative path
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `PathRenameError` - Failed to rename or move the path
+
+<CodeGroup>
+```typescript Example - Rename
+const result = await fss.renamePath(
+  ".agents/old-name",
+  ".agents/new-name"
+);
+
+if (result.success) {
+  console.log(`Renamed to: ${result.data}`);
+}
+```
+
+```typescript Example - Move
+const result = await fss.renamePath(
+  "temp/file.txt",
+  "archive/file.txt"
+);
+
+if (result.success) {
+  console.log(`Moved to: ${result.data}`);
+}
+```
+</CodeGroup>
+
+---
+
+### deletePath
+
+Deletes a file or directory recursively.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path to delete
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The deleted relative path
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `PathDeleteError` - Failed to delete the path
+
+**Behavior:**
+- Deletes files and directories recursively
+- Uses `force: true` option (doesn't fail if path doesn't exist)
+
+<CodeGroup>
+```typescript Example
+const result = await fss.deletePath("temp/old-data");
+
+if (result.success) {
+  console.log(`Deleted: ${result.data}`);
+}
+```
+</CodeGroup>
+
+---
+
+### stat
+
+Retrieves file system statistics for a path.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path to check
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Object with `isDirectory()` method
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `FileAccessError` - Cannot access the path
+
+<CodeGroup>
+```typescript Example
+const result = await fss.stat(".agents/support");
+
+if (result.success) {
+  if (result.data.isDirectory()) {
+    console.log("Path is a directory");
+  } else {
+    console.log("Path is a file");
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### mkdir
+
+Creates a directory.
+
+<ParamField path="relativePath" type="string" required>
+  Relative path for the new directory
+</ParamField>
+
+<ParamField path="recursive" type="boolean">
+  Whether to create parent directories (default: false)
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="string">
+  The relative path of the created directory
+</ResponseField>
+
+<ResponseField name="error" type="FsError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `InvalidPathError` - Path is invalid or outside workspace
+- `FileWriteError` - Failed to create the directory
+
+<CodeGroup>
+```typescript Example - Single Directory
+const result = await fss.mkdir("data");
+
+if (result.success) {
+  console.log(`Created: ${result.data}`);
+}
+```
+
+```typescript Example - Nested Directories
+const result = await fss.mkdir("data/archive/2024", true);
+
+if (result.success) {
+  console.log(`Created: ${result.data}`);
+}
+```
+</CodeGroup>
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Full Workflow
+import { inject, injectable } from "tsyringe";
+import { FileSystemService } from "@/main/services/fs/fs.service";
+
+@injectable()
+export class DataManager {
+  constructor(
+    @inject(FileSystemService) private readonly fss: FileSystemService
+  ) {}
+
+  async initialize(workspaceRoot: string) {
+    // Open workspace
+    const openResult = await this.fss.openFolder(workspaceRoot);
+    if (!openResult.success) {
+      throw new Error(`Cannot open workspace: ${openResult.error.message}`);
+    }
+
+    // Create data directory
+    const mkdirResult = await this.fss.mkdir("data", true);
+    if (!mkdirResult.success) {
+      console.warn(`Failed to create data dir: ${mkdirResult.error.message}`);
+    }
+  }
+
+  async saveData(filename: string, data: object) {
+    const content = JSON.stringify(data, null, 2);
+    const result = await this.fss.writeFile(`data/${filename}`, content);
+    
+    if (result.success) {
+      console.log(`Saved to: ${result.data}`);
+    } else {
+      console.error(`Save failed: ${result.error.message}`);
+    }
+  }
+
+  async loadData(filename: string): Promise<object | null> {
+    const result = await this.fss.readFile(`data/${filename}`);
+    
+    if (result.success) {
+      try {
+        return JSON.parse(result.data.content);
+      } catch (error) {
+        console.error(`Parse failed: ${error}`);
+        return null;
+      }
+    } else {
+      console.error(`Load failed: ${result.error.message}`);
+      return null;
+    }
+  }
+
+  async listDataFiles(): Promise<string[]> {
+    const treeResult = await this.fss.listTree();
+    if (!treeResult.success) {
+      return [];
+    }
+
+    const dataNode = treeResult.data.children?.find(
+      (node) => node.name === "data" && node.type === "directory"
+    );
+
+    if (!dataNode || !dataNode.children) {
+      return [];
+    }
+
+    return dataNode.children
+      .filter((node) => node.type === "file")
+      .map((node) => node.name);
+  }
+
+  async archiveFile(filename: string) {
+    // Create archive directory
+    await this.fss.mkdir("data/archive", true);
+
+    // Move file
+    const result = await this.fss.renamePath(
+      `data/${filename}`,
+      `data/archive/${filename}`
+    );
+
+    if (result.success) {
+      console.log(`Archived: ${filename}`);
+    }
+  }
+
+  async cleanupOldFiles() {
+    const deleteResult = await this.fss.deletePath("data/archive");
+    if (deleteResult.success) {
+      console.log("Archive cleaned up");
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Error Handling
+
+All methods return a `Result<T, E>` type:
+
+```typescript
+const result = await fss.readFile("config.json");
+
+if (result.success) {
+  const content = result.data.content;
+} else {
+  console.error(`Error [${result.error.code}]: ${result.error.message}`);
+}
+```
+
+### Common Error Codes
+
+- `InvalidPathError` - Path is empty, malformed, or attempts to escape the workspace root
+- `RootAccessError` - Cannot access or create the workspace root directory
+- `FileAccessError` - Cannot read or access the specified file
+- `FileWriteError` - Cannot write to or create a file
+- `NotAFileError` - Path points to a directory when a file was expected
+- `PathRenameError` - Cannot rename or move the path
+- `PathDeleteError` - Cannot delete the path
+- `TreeReadError` - Cannot read the directory tree
+
+---
+
+## Security
+
+The service enforces strict path validation:
+
+- All relative paths are resolved against the workspace root
+- Path traversal attempts (e.g., `../../../etc/passwd`) are blocked
+- Operations are confined to the workspace root directory
+- Symbolic links are resolved and validated

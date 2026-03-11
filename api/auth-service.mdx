@@ -1,0 +1,413 @@
+---
+title: AuthService
+description: Service for authentication and session management using Better Auth
+---
+
+The `AuthService` provides authentication functionality for Arkitec using the Better Auth library with Electron integration. It handles OAuth flows, session management, and secure token storage.
+
+## Injection
+
+The service is a singleton injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { AuthService } from "@/main/services/auth/auth.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(AuthService) private readonly auth: AuthService
+  ) {}
+}
+```
+
+## Configuration
+
+The service uses the following environment variables:
+
+- `ARKITEC_SIGN_IN_URL` - Custom sign-in URL (optional, defaults to `${BASE_URL}/login`)
+- The base URL is configured in `@/main/lib/network/registry`
+
+**Protocol Configuration:**
+- Deep link scheme: `com.arkitec.app`
+- Auth endpoint: `${BASE_URL}/auth`
+
+## Public Methods
+
+### setupMain
+
+Initializes the main process authentication bridge. **Must be called before the Electron app is ready.**
+
+**Returns:** `void`
+
+**Behavior:**
+- Sets up deep-link protocol handling for OAuth redirects
+- Initializes secure token storage
+- Configures the main-process auth bridge
+
+<CodeGroup>
+```typescript Example
+import { app } from "electron";
+import { AuthService } from "@/main/services/auth/auth.service";
+import { container } from "tsyringe";
+
+const authService = container.resolve(AuthService);
+
+// IMPORTANT: Call before app.whenReady()
+authService.setupMain();
+
+app.whenReady().then(() => {
+  // Initialize rest of the app
+});
+```
+
+```typescript Application Lifecycle
+// main.ts or index.ts
+import { app } from "electron";
+import { container } from "tsyringe";
+import { AuthService } from "@/main/services/auth/auth.service";
+
+// Resolve the auth service
+const authService = container.resolve(AuthService);
+
+// Setup auth BEFORE app is ready
+authService.setupMain();
+console.log("Auth bridge initialized");
+
+// Wait for Electron to be ready
+app.whenReady().then(async () => {
+  // Create windows, start services, etc.
+  await startApplication();
+});
+```
+</CodeGroup>
+
+---
+
+### getSession
+
+Fetches the current authentication session from the auth server.
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="object | null">
+  Session data containing user information, or `null` if not authenticated
+</ResponseField>
+
+<ResponseField name="error" type="AuthError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `GetSessionError` - Network error or authentication server error
+
+**Behavior:**
+- Makes a request to the auth server to validate the current session
+- Returns `null` if the user is not authenticated
+- Returns session and user data if authenticated
+
+<CodeGroup>
+```typescript Example
+const result = await authService.getSession();
+
+if (result.success) {
+  if (result.data) {
+    console.log("User is authenticated");
+    console.log("Session:", result.data.session);
+    console.log("User:", result.data.user);
+  } else {
+    console.log("User is not authenticated");
+  }
+} else {
+  console.error(`Auth error: ${result.error.message}`);
+}
+```
+
+```typescript Session Type
+// The session data structure (exact type depends on Better Auth configuration)
+interface SessionData {
+  session: {
+    id: string;
+    userId: string;
+    expiresAt: number;
+    // ... other session fields
+  };
+  user: {
+    id: string;
+    email: string;
+    name?: string;
+    // ... other user fields
+  };
+}
+```
+
+```typescript Checking Authentication
+async function isUserAuthenticated(): Promise<boolean> {
+  const result = await authService.getSession();
+  return result.success && result.data !== null;
+}
+```
+</CodeGroup>
+
+---
+
+### cookie (getter)
+
+Retrieves the current authentication cookies as a string.
+
+<ResponseField name="return" type="string">
+  Cookie string for the current session
+</ResponseField>
+
+**Usage:**
+- Useful for making authenticated HTTP requests
+- Can be included in request headers
+- Automatically managed by the Better Auth client
+
+<CodeGroup>
+```typescript Example
+const cookies = authService.cookie;
+console.log("Auth cookies:", cookies);
+```
+
+```typescript Authenticated Request
+import fetch from "node-fetch";
+
+async function makeAuthenticatedRequest(url: string) {
+  const cookies = authService.cookie;
+  
+  const response = await fetch(url, {
+    headers: {
+      "Cookie": cookies
+    }
+  });
+  
+  return response.json();
+}
+```
+</CodeGroup>
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Main Process Setup
+// main/index.ts
+import { app, BrowserWindow } from "electron";
+import { container } from "tsyringe";
+import { AuthService } from "@/main/services/auth/auth.service";
+
+// Initialize auth service
+const authService = container.resolve(AuthService);
+
+// CRITICAL: Setup auth BEFORE app is ready
+authService.setupMain();
+
+let mainWindow: BrowserWindow | null = null;
+
+app.whenReady().then(async () => {
+  // Create main window
+  mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  // Check authentication status
+  const sessionResult = await authService.getSession();
+  
+  if (sessionResult.success && sessionResult.data) {
+    // User is authenticated, load main app
+    mainWindow.loadURL("app://./index.html");
+  } else {
+    // User is not authenticated, show login
+    mainWindow.loadURL("app://./login.html");
+  }
+});
+```
+
+```typescript IPC Handler
+// main/ipc/auth.handler.ts
+import { ipcMain } from "electron";
+import { container } from "tsyringe";
+import { AuthService } from "@/main/services/auth/auth.service";
+
+const authService = container.resolve(AuthService);
+
+// Handle session check from renderer
+ipcMain.handle("auth:get-session", async () => {
+  const result = await authService.getSession();
+  
+  if (result.success) {
+    return {
+      success: true,
+      data: result.data
+    };
+  } else {
+    return {
+      success: false,
+      error: result.error.message
+    };
+  }
+});
+
+// Handle cookie retrieval
+ipcMain.handle("auth:get-cookie", () => {
+  return authService.cookie;
+});
+```
+
+```typescript Service Integration
+import { inject, injectable } from "tsyringe";
+import { AuthService } from "@/main/services/auth/auth.service";
+import fetch from "node-fetch";
+
+@injectable()
+export class ApiService {
+  constructor(
+    @inject(AuthService) private readonly auth: AuthService
+  ) {}
+
+  async makeAuthenticatedRequest<T>(url: string): Promise<T | null> {
+    // Check if user is authenticated
+    const sessionResult = await this.auth.getSession();
+    
+    if (!sessionResult.success || !sessionResult.data) {
+      console.error("User not authenticated");
+      return null;
+    }
+
+    // Make authenticated request
+    const response = await fetch(url, {
+      headers: {
+        "Cookie": this.auth.cookie
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Request failed: ${response.statusText}`);
+    }
+
+    return response.json() as Promise<T>;
+  }
+
+  async getUserProfile() {
+    const sessionResult = await this.auth.getSession();
+    
+    if (sessionResult.success && sessionResult.data) {
+      return sessionResult.data.user;
+    }
+    
+    return null;
+  }
+}
+```
+
+```typescript Authentication Guard
+import { inject, injectable } from "tsyringe";
+import { AuthService } from "@/main/services/auth/auth.service";
+
+@injectable()
+export class AuthGuard {
+  constructor(
+    @inject(AuthService) private readonly auth: AuthService
+  ) {}
+
+  async requireAuthentication(): Promise<boolean> {
+    const result = await this.auth.getSession();
+    
+    if (!result.success) {
+      console.error("Auth check failed:", result.error.message);
+      return false;
+    }
+
+    if (!result.data) {
+      console.warn("User is not authenticated");
+      return false;
+    }
+
+    return true;
+  }
+
+  async getUserOrThrow() {
+    const result = await this.auth.getSession();
+    
+    if (!result.success) {
+      throw new Error(`Auth error: ${result.error.message}`);
+    }
+
+    if (!result.data) {
+      throw new Error("User is not authenticated");
+    }
+
+    return result.data.user;
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Error Handling
+
+The `getSession()` method returns a `Result<T, E>` type:
+
+```typescript
+const result = await authService.getSession();
+
+if (result.success) {
+  if (result.data) {
+    // User is authenticated
+    const { session, user } = result.data;
+  } else {
+    // User is not authenticated (not an error)
+  }
+} else {
+  // Network error or auth server error
+  console.error(`Error [${result.error.code}]: ${result.error.message}`);
+}
+```
+
+### Error Codes
+
+- `GetSessionError` - Failed to fetch or validate the session (network error, server error, etc.)
+
+---
+
+## Authentication Flow
+
+1. **App Startup:**
+   - `setupMain()` is called before `app.whenReady()`
+   - Auth bridge is initialized with deep-link handling
+
+2. **Sign In:**
+   - User clicks "Sign In" button
+   - App opens system browser to `ARKITEC_SIGN_IN_URL`
+   - User completes OAuth flow in browser
+   - Browser redirects to `com.arkitec.app://auth/callback`
+   - Deep link triggers callback in Electron app
+   - Tokens are stored securely
+
+3. **Session Check:**
+   - Call `getSession()` to verify authentication
+   - Returns user data if authenticated, `null` otherwise
+
+4. **Authenticated Requests:**
+   - Use `authService.cookie` to include auth cookies in requests
+   - Tokens are automatically managed by Better Auth
+
+---
+
+## Security Notes
+
+- Tokens are stored securely using the Electron storage API
+- Deep-link protocol prevents token exposure in URLs
+- Session validation happens server-side
+- HTTPS is required for production deployments
+- `setupMain()` must be called before app initialization to properly handle OAuth redirects
