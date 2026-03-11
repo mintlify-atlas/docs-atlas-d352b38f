@@ -1,0 +1,642 @@
+---
+title: TaskManagerService
+description: Service for managing tasks with persistent storage using LowDB
+---
+
+The `TaskManagerService` provides methods to create, read, update, and delete tasks within an Arkitec workspace. Tasks are stored in a JSON database using LowDB and support filtering, status tracking, and hierarchical relationships.
+
+## Injection
+
+The service is injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { TaskManagerService } from "@/main/services/task-manager/task-manager.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(TaskManagerService) private readonly tasks: TaskManagerService
+  ) {}
+}
+```
+
+## Public Methods
+
+### list
+
+Retrieves tasks from the database with optional filtering.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ParamField path="filters" type="TaskFilters">
+  Optional filters to apply to the task list
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="Task[]">
+  Array of tasks matching the filters
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+**TaskFilters Type:**
+```typescript
+interface TaskFilters {
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  program?: string;
+  task?: string;
+  parentId?: number;
+}
+
+type TaskStatus = "pending" | "in_progress" | "done" | "blocked";
+type TaskPriority = "low" | "normal" | "high" | "urgent";
+```
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.list(".agents/my-agent", {
+  status: "pending",
+  priority: "high"
+});
+
+if (result.success) {
+  console.log(`Found ${result.data.length} high-priority pending tasks`);
+  result.data.forEach(task => {
+    console.log(`${task.id}: ${task.description}`);
+  });
+}
+```
+
+```typescript All Tasks
+const result = await taskManager.list(".agents/my-agent");
+// Returns all tasks without filtering
+```
+
+```typescript By Program
+const result = await taskManager.list(".agents/my-agent", {
+  program: "code-review"
+});
+// Returns tasks for the "code-review" program
+```
+</CodeGroup>
+
+---
+
+### listAll
+
+Retrieves all tasks without any filtering. Equivalent to calling `list()` without filters.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="Task[]">
+  Array of all tasks
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.listAll(".agents/my-agent");
+
+if (result.success) {
+  console.log(`Total tasks: ${result.data.length}`);
+  
+  const statusCounts = result.data.reduce((acc, task) => {
+    acc[task.status] = (acc[task.status] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  
+  console.log("Status breakdown:", statusCounts);
+}
+```
+</CodeGroup>
+
+---
+
+### get
+
+Retrieves a single task by its ID.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ParamField path="id" type="number" required>
+  The unique ID of the task
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="Task | null">
+  The task object, or null if not found
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.get(".agents/my-agent", 42);
+
+if (result.success) {
+  if (result.data) {
+    console.log(`Task: ${result.data.description}`);
+    console.log(`Status: ${result.data.status}`);
+    console.log(`Priority: ${result.data.priority}`);
+  } else {
+    console.log("Task not found");
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### create
+
+Creates a new task and stores it in the database.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ParamField path="input.program" type="string" required>
+  The program this task belongs to
+</ParamField>
+
+<ParamField path="input.task" type="string" required>
+  The task identifier or name
+</ParamField>
+
+<ParamField path="input.description" type="string" required>
+  Human-readable description of the task
+</ParamField>
+
+<ParamField path="input.parentId" type="number">
+  Optional ID of the parent task for hierarchical relationships
+</ParamField>
+
+<ParamField path="input.status" type="TaskStatus">
+  Initial status (default: "pending")
+</ParamField>
+
+<ParamField path="input.priority" type="TaskPriority">
+  Initial priority (default: "normal")
+</ParamField>
+
+<ParamField path="input.references" type="string">
+  Optional references or additional metadata
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="Task">
+  The newly created task with auto-generated ID and timestamps
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+**Task Type:**
+```typescript
+interface Task {
+  id: number;
+  program: string;
+  task: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  parentId?: number;
+  references?: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+}
+```
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.create(".agents/my-agent", {
+  program: "code-review",
+  task: "review-pr-123",
+  description: "Review pull request #123 for security issues",
+  status: "pending",
+  priority: "high"
+});
+
+if (result.success) {
+  console.log(`Created task ${result.data.id}`);
+  console.log(`Created at: ${result.data.createdAt}`);
+}
+```
+
+```typescript With Parent Task
+const parentResult = await taskManager.create(".agents/my-agent", {
+  program: "deployment",
+  task: "deploy-v1",
+  description: "Deploy version 1.0.0"
+});
+
+if (parentResult.success) {
+  // Create a subtask
+  const subtaskResult = await taskManager.create(".agents/my-agent", {
+    program: "deployment",
+    task: "run-tests",
+    description: "Run integration tests before deployment",
+    parentId: parentResult.data.id,
+    priority: "urgent"
+  });
+}
+```
+</CodeGroup>
+
+---
+
+### update
+
+Updates an existing task with new values.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ParamField path="id" type="number" required>
+  The ID of the task to update
+</ParamField>
+
+<ParamField path="input" type="UpdateInput" required>
+  Fields to update (all optional)
+</ParamField>
+
+**UpdateInput Type:**
+```typescript
+interface UpdateInput {
+  parentId?: number;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  references?: string;
+}
+```
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="Task | null">
+  The updated task, or null if task not found
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+**Behavior:**
+- Automatically sets `updatedAt` to current timestamp
+- If status is changed to "done", sets `resolvedAt` timestamp
+- If status is changed from "done" to something else, removes `resolvedAt`
+- Only provided fields are updated; others remain unchanged
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.update(".agents/my-agent", 42, {
+  status: "in_progress",
+  priority: "high"
+});
+
+if (result.success && result.data) {
+  console.log(`Updated task ${result.data.id}`);
+  console.log(`New status: ${result.data.status}`);
+  console.log(`Updated at: ${result.data.updatedAt}`);
+}
+```
+
+```typescript Mark as Done
+const result = await taskManager.update(".agents/my-agent", 42, {
+  status: "done"
+});
+
+if (result.success && result.data) {
+  console.log(`Task completed at: ${result.data.resolvedAt}`);
+}
+```
+</CodeGroup>
+
+---
+
+### markDone
+
+Convenience method to mark a task as done. Equivalent to calling `update()` with `status: "done"`.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ParamField path="id" type="number" required>
+  The ID of the task to mark as done
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="Task | null">
+  The updated task, or null if task not found
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.markDone(".agents/my-agent", 42);
+
+if (result.success && result.data) {
+  console.log(`Task ${result.data.id} completed`);
+  console.log(`Resolved at: ${result.data.resolvedAt}`);
+}
+```
+</CodeGroup>
+
+---
+
+### delete
+
+Deletes a task from the database.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ParamField path="id" type="number" required>
+  The ID of the task to delete
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="boolean">
+  true if task was deleted, false if task was not found
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.delete(".agents/my-agent", 42);
+
+if (result.success) {
+  if (result.data) {
+    console.log("Task deleted successfully");
+  } else {
+    console.log("Task not found");
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### getStoreInfo
+
+Returns metadata about the tasks database.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the tasks database
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="StoreInfo">
+  Database information including path and task count
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the operation failed
+</ResponseField>
+
+**StoreInfo Type:**
+```typescript
+interface StoreInfo {
+  path: string;
+  count: number;
+}
+```
+
+<CodeGroup>
+```typescript Example
+const result = await taskManager.getStoreInfo(".agents/my-agent");
+
+if (result.success) {
+  console.log(`Database path: ${result.data.path}`);
+  console.log(`Total tasks: ${result.data.count}`);
+}
+```
+</CodeGroup>
+
+---
+
+## RPC Methods
+
+The service exposes RPC methods through `TasksRpcController` under the `tasks` namespace:
+
+### tasks.listAll
+
+```typescript
+interface Request {
+  directory: string;
+}
+
+interface Response {
+  id: number;
+  program: string;
+  task: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  parentId?: number;
+  references?: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+}[]
+```
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Full Workflow
+import { inject, injectable } from "tsyringe";
+import { TaskManagerService } from "@/main/services/task-manager/task-manager.service";
+
+@injectable()
+export class TaskWorkflow {
+  constructor(
+    @inject(TaskManagerService) private readonly tasks: TaskManagerService
+  ) {}
+
+  async processCodeReview(directory: string, prNumber: number) {
+    // Create main review task
+    const mainTask = await this.tasks.create(directory, {
+      program: "code-review",
+      task: `pr-${prNumber}`,
+      description: `Review pull request #${prNumber}`,
+      priority: "high"
+    });
+
+    if (!mainTask.success) {
+      throw new Error(`Failed to create task: ${mainTask.error}`);
+    }
+
+    const mainTaskId = mainTask.data.id;
+
+    // Create subtasks
+    const subtasks = [
+      "Check code style and formatting",
+      "Review security implications",
+      "Verify test coverage",
+      "Check for breaking changes"
+    ];
+
+    for (const desc of subtasks) {
+      await this.tasks.create(directory, {
+        program: "code-review",
+        task: `pr-${prNumber}-subtask`,
+        description: desc,
+        parentId: mainTaskId,
+        priority: "normal"
+      });
+    }
+
+    // Start the main task
+    await this.tasks.update(directory, mainTaskId, {
+      status: "in_progress"
+    });
+
+    return mainTaskId;
+  }
+
+  async completeSubtask(directory: string, taskId: number) {
+    const result = await this.tasks.markDone(directory, taskId);
+    
+    if (result.success && result.data) {
+      console.log(`Subtask ${taskId} completed`);
+      
+      // Check if all subtasks are done
+      const parentId = result.data.parentId;
+      if (parentId) {
+        await this.checkParentCompletion(directory, parentId);
+      }
+    }
+  }
+
+  private async checkParentCompletion(directory: string, parentId: number) {
+    const subtasksResult = await this.tasks.list(directory, { parentId });
+    
+    if (subtasksResult.success) {
+      const allDone = subtasksResult.data.every(t => t.status === "done");
+      
+      if (allDone) {
+        await this.tasks.markDone(directory, parentId);
+        console.log(`All subtasks completed. Parent task ${parentId} marked as done.`);
+      }
+    }
+  }
+
+  async getTaskSummary(directory: string) {
+    const result = await this.tasks.listAll(directory);
+    
+    if (!result.success) {
+      throw new Error(`Failed to get tasks: ${result.error}`);
+    }
+
+    const summary = {
+      total: result.data.length,
+      pending: result.data.filter(t => t.status === "pending").length,
+      inProgress: result.data.filter(t => t.status === "in_progress").length,
+      done: result.data.filter(t => t.status === "done").length,
+      blocked: result.data.filter(t => t.status === "blocked").length,
+      highPriority: result.data.filter(t => t.priority === "high" || t.priority === "urgent").length
+    };
+
+    return summary;
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Implementation Details
+
+**Storage:**
+- Uses LowDB with JSONFile adapter for persistent storage
+- Database is cached per directory to avoid repeated file reads
+- Database file is created automatically if it doesn't exist
+- Parent directories are created recursively if needed
+
+**Auto-generated Fields:**
+- `id` - Auto-incremented integer starting from 1
+- `createdAt` - ISO 8601 timestamp when task is created
+- `updatedAt` - ISO 8601 timestamp, updated on every modification
+- `resolvedAt` - ISO 8601 timestamp, set when status changes to "done"
+
+**Task IDs:**
+- IDs are unique within each directory's database
+- IDs are never reused, even after deletion
+- `nextId` counter is persisted in the database
+
+---
+
+## Error Handling
+
+All methods return a `Result<T, string>` type that must be checked:
+
+```typescript
+const result = await taskManager.get(directory, 42);
+
+if (result.success) {
+  // Use result.data
+  const task = result.data;
+} else {
+  // Handle result.error
+  console.error(`Error: ${result.error}`);
+}
+```
+
+### Common Errors
+
+- `TasksPathError` - Failed to resolve tasks database path
+- `TaskStoreError` - Failed to read/write database file
+- Database I/O errors are caught and returned as failure results

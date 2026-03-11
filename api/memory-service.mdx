@@ -1,0 +1,670 @@
+---
+title: MemoryService
+description: Service for reading and querying agent memory logs with aggregation and filtering
+---
+
+The `MemoryService` provides methods to read, query, and analyze agent memory logs. It supports filtering by program, task, pattern matching, and token counting for memory usage analysis.
+
+## Injection
+
+The service is injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { MemoryService } from "@/main/services/memory/memory.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(MemoryService) private readonly memory: MemoryService
+  ) {}
+}
+```
+
+## Public Methods
+
+### recent
+
+Retrieves the most recent memory entries from the log.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.lines" type="number">
+  Number of entries to retrieve (default: 50)
+</ParamField>
+
+<ParamField path="input.offset" type="number">
+  Number of entries to skip from the start
+</ParamField>
+
+<ResponseField name="entries" type="string[]">
+  Array of memory log entries in ascending order
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const entries = await memoryService.recent(".agents/my-agent", {
+  lines: 20
+});
+
+entries.forEach(entry => {
+  console.log(entry);
+});
+```
+
+```typescript With Offset
+const entries = await memoryService.recent(".agents/my-agent", {
+  lines: 10,
+  offset: 50
+});
+// Skip first 50 entries, return next 10
+```
+
+```typescript Default Behavior
+const entries = await memoryService.recent(".agents/my-agent");
+// Returns last 50 entries
+```
+</CodeGroup>
+
+---
+
+### getTokensByProgram
+
+Calculates token counts for specified programs based on their memory entries.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.programs" type="string[]" required>
+  Array of program names to analyze
+</ParamField>
+
+<ResponseField name="tokenCounts" type="Record<string, number>">
+  Object mapping program names to estimated token counts
+</ResponseField>
+
+**Token Estimation:**
+Tokens are estimated as: `floor(0.75 * wordCount)` where words are split by whitespace.
+
+<CodeGroup>
+```typescript Example
+const tokens = await memoryService.getTokensByProgram(".agents/my-agent", {
+  programs: ["code-review", "documentation", "testing"]
+});
+
+console.log(tokens);
+// {
+//   "code-review": 1250,
+//   "documentation": 3420,
+//   "testing": 890
+// }
+```
+
+```typescript Track Usage
+const programs = ["agent-1", "agent-2", "agent-3"];
+const tokens = await memoryService.getTokensByProgram(
+  ".agents/coordinator",
+  { programs }
+);
+
+const totalTokens = Object.values(tokens).reduce((sum, count) => sum + count, 0);
+console.log(`Total tokens used: ${totalTokens}`);
+
+programs.forEach(program => {
+  const percentage = ((tokens[program] / totalTokens) * 100).toFixed(1);
+  console.log(`${program}: ${tokens[program]} (${percentage}%)`);
+});
+```
+</CodeGroup>
+
+---
+
+### getTokensByTask
+
+Calculates token counts for specified tasks based on their memory entries.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.tasks" type="string[]" required>
+  Array of task identifiers to analyze
+</ParamField>
+
+<ResponseField name="tokenCounts" type="Record<string, number>">
+  Object mapping task identifiers to estimated token counts
+</ResponseField>
+
+**Behavior:**
+- Searches for entries containing the task tag: `[taskId]`
+- Uses the same token estimation formula as `getTokensByProgram`
+
+<CodeGroup>
+```typescript Example
+const tokens = await memoryService.getTokensByTask(".agents/my-agent", {
+  tasks: ["review-pr-123", "fix-bug-456", "implement-feature-789"]
+});
+
+console.log(tokens);
+// {
+//   "review-pr-123": 540,
+//   "fix-bug-456": 320,
+//   "implement-feature-789": 1100
+// }
+```
+</CodeGroup>
+
+---
+
+### getTextChunksByTask
+
+Retrieves all memory content chunks for specified tasks.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.tasks" type="string[]" required>
+  Array of task identifiers to retrieve
+</ParamField>
+
+<ResponseField name="chunks" type="TaskChunk[]">
+  Array of task chunks containing the task ID and its memory entries
+</ResponseField>
+
+**TaskChunk Type:**
+```typescript
+interface TaskChunk {
+  task: string;
+  chunks: string[];
+}
+```
+
+<CodeGroup>
+```typescript Example
+const chunks = await memoryService.getTextChunksByTask(".agents/my-agent", {
+  tasks: ["deploy-v1", "run-tests"]
+});
+
+chunks.forEach(({ task, chunks }) => {
+  console.log(`\nTask: ${task}`);
+  console.log(`Entries: ${chunks.length}`);
+  chunks.forEach(chunk => {
+    console.log(chunk);
+  });
+});
+```
+
+```typescript Extract Context
+const chunks = await memoryService.getTextChunksByTask(".agents/my-agent", {
+  tasks: ["debug-session"]
+});
+
+if (chunks.length > 0) {
+  const debugContext = chunks[0].chunks.join("\n\n");
+  console.log("Full debug session context:");
+  console.log(debugContext);
+}
+```
+</CodeGroup>
+
+---
+
+### readByProgram
+
+Reads memory entries for a specific program with pagination.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.program" type="string" required>
+  The program name to filter by
+</ParamField>
+
+<ParamField path="input.limit" type="number">
+  Maximum number of entries to return (default: 10)
+</ParamField>
+
+<ParamField path="input.offset" type="number">
+  Number of entries to skip
+</ParamField>
+
+<ParamField path="input.order" type="EntryOrder">
+  Sort order: "asc" or "desc"
+</ParamField>
+
+<ResponseField name="entries" type="string[]">
+  Array of memory entries for the specified program
+</ResponseField>
+
+**Behavior:**
+- Groups memory entries by program "run" (continuous execution session)
+- Returns complete runs, not individual entries
+- Default limit is 10 blocks/runs
+
+<CodeGroup>
+```typescript Example
+const entries = await memoryService.readByProgram(".agents/my-agent", {
+  program: "code-review",
+  limit: 5,
+  order: "desc"
+});
+
+console.log(`Last 5 code-review runs:`);
+entries.forEach(entry => {
+  console.log(entry);
+});
+```
+
+```typescript Paginated Access
+let offset = 0;
+const limit = 10;
+
+while (true) {
+  const entries = await memoryService.readByProgram(".agents/my-agent", {
+    program: "deployment",
+    limit,
+    offset,
+    order: "asc"
+  });
+
+  if (entries.length === 0) break;
+
+  console.log(`Batch ${offset / limit + 1}:`);
+  entries.forEach(entry => console.log(entry));
+
+  offset += limit;
+}
+```
+</CodeGroup>
+
+---
+
+### readByProgramAndTask
+
+Reads memory entries for a specific program and task combination.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.program" type="string" required>
+  The program name to filter by
+</ParamField>
+
+<ParamField path="input.task" type="string" required>
+  The task identifier to filter by
+</ParamField>
+
+<ParamField path="input.limit" type="number">
+  Maximum number of entries to return (default: 10)
+</ParamField>
+
+<ParamField path="input.offset" type="number">
+  Number of entries to skip
+</ParamField>
+
+<ParamField path="input.order" type="EntryOrder">
+  Sort order: "asc" or "desc"
+</ParamField>
+
+<ResponseField name="entries" type="string[]">
+  Array of memory entries matching both program and task
+</ResponseField>
+
+**Behavior:**
+- Searches for entries with the tag pattern: `[program][task]`
+- Returns individual entries, not grouped by run
+
+<CodeGroup>
+```typescript Example
+const entries = await memoryService.readByProgramAndTask(".agents/my-agent", {
+  program: "code-review",
+  task: "pr-123",
+  limit: 20
+});
+
+console.log(`Entries for code-review/pr-123:`);
+entries.forEach(entry => {
+  console.log(entry);
+});
+```
+</CodeGroup>
+
+---
+
+### grep
+
+Searches memory entries using a regular expression pattern.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ParamField path="input.pattern" type="string" required>
+  Regular expression pattern to search for
+</ParamField>
+
+<ParamField path="input.limit" type="number">
+  Maximum number of matching entries to return (default: 10)
+</ParamField>
+
+<ParamField path="input.offset" type="number">
+  Number of matching entries to skip
+</ParamField>
+
+<ParamField path="input.order" type="EntryOrder">
+  Sort order: "asc" or "desc"
+</ParamField>
+
+<ResponseField name="entries" type="string[]">
+  Array of memory entries matching the pattern
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const entries = await memoryService.grep(".agents/my-agent", {
+  pattern: "error|exception|failed",
+  limit: 50
+});
+
+console.log(`Found ${entries.length} error-related entries:`);
+entries.forEach(entry => {
+  console.log(entry);
+});
+```
+
+```typescript Find Specific Task Type
+const entries = await memoryService.grep(".agents/my-agent", {
+  pattern: "\\[deployment\\].*\\[prod\\]",
+  order: "desc"
+});
+
+console.log("Production deployment entries:");
+entries.forEach(entry => console.log(entry));
+```
+
+```typescript Case-Insensitive Search
+const entries = await memoryService.grep(".agents/my-agent", {
+  pattern: "(?i)warning",
+  limit: 25
+});
+```
+</CodeGroup>
+
+---
+
+### getLogInfo
+
+Retrieves metadata about the memory log file.
+
+<ParamField path="directory" type="string" required>
+  The directory path containing the memory log
+</ParamField>
+
+<ResponseField name="path" type="string">
+  Absolute path to the log file
+</ResponseField>
+
+<ResponseField name="exists" type="boolean">
+  Whether the log file exists
+</ResponseField>
+
+<ResponseField name="sizeBytes" type="number">
+  Size of the log file in bytes
+</ResponseField>
+
+<ResponseField name="lineCount" type="number">
+  Number of aggregated entries in the log
+</ResponseField>
+
+<CodeGroup>
+```typescript Example
+const info = await memoryService.getLogInfo(".agents/my-agent");
+
+console.log(`Log path: ${info.path}`);
+console.log(`Exists: ${info.exists}`);
+
+if (info.exists) {
+  const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(2);
+  console.log(`Size: ${sizeMB} MB`);
+  console.log(`Entries: ${info.lineCount}`);
+}
+```
+
+```typescript Monitor Log Growth
+const checkLogSize = async () => {
+  const info = await memoryService.getLogInfo(".agents/my-agent");
+  
+  if (info.sizeBytes > 100 * 1024 * 1024) { // 100MB
+    console.warn("Log file exceeds 100MB. Consider archiving.");
+  }
+};
+
+setInterval(checkLogSize, 3600000); // Check every hour
+```
+</CodeGroup>
+
+---
+
+## RPC Methods
+
+The service exposes RPC methods through `MemoryRpcController` under the `memory` namespace:
+
+### memory.getTokensByProgram
+
+```typescript
+interface Request {
+  directory: string;
+  input: {
+    programs: string[];
+  };
+}
+
+interface Response {
+  [program: string]: number;
+}
+```
+
+### memory.getTokensByTask
+
+```typescript
+interface Request {
+  directory: string;
+  input: {
+    tasks: string[];
+  };
+}
+
+interface Response {
+  [task: string]: number;
+}
+```
+
+### memory.getTextChunksByTask
+
+```typescript
+interface Request {
+  directory: string;
+  input: {
+    tasks: string[];
+  };
+}
+
+interface Response {
+  task: string;
+  chunks: string[];
+}[]
+```
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Full Workflow
+import { inject, injectable } from "tsyringe";
+import { MemoryService } from "@/main/services/memory/memory.service";
+
+@injectable()
+export class MemoryAnalyzer {
+  constructor(
+    @inject(MemoryService) private readonly memory: MemoryService
+  ) {}
+
+  async analyzeAgentUsage(directory: string, programs: string[]) {
+    // Get log metadata
+    const info = await this.memory.getLogInfo(directory);
+    console.log(`\nMemory Log Analysis`);
+    console.log(`Path: ${info.path}`);
+    console.log(`Size: ${(info.sizeBytes / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`Entries: ${info.lineCount}`);
+
+    // Analyze token usage by program
+    const tokensByProgram = await this.memory.getTokensByProgram(directory, {
+      programs
+    });
+
+    console.log(`\nToken Usage by Program:`);
+    const totalTokens = Object.values(tokensByProgram).reduce((a, b) => a + b, 0);
+    
+    for (const [program, tokens] of Object.entries(tokensByProgram)) {
+      const percentage = ((tokens / totalTokens) * 100).toFixed(1);
+      console.log(`  ${program}: ${tokens.toLocaleString()} (${percentage}%)`);
+    }
+
+    console.log(`  Total: ${totalTokens.toLocaleString()}`);
+
+    // Find recent errors
+    const errorEntries = await this.memory.grep(directory, {
+      pattern: "error|exception|failed",
+      limit: 10,
+      order: "desc"
+    });
+
+    if (errorEntries.length > 0) {
+      console.log(`\nRecent Errors (${errorEntries.length}):`);
+      errorEntries.forEach((entry, i) => {
+        console.log(`${i + 1}. ${entry.substring(0, 100)}...`);
+      });
+    }
+
+    return {
+      logInfo: info,
+      tokensByProgram,
+      totalTokens,
+      recentErrors: errorEntries.length
+    };
+  }
+
+  async getTaskContext(directory: string, taskId: string) {
+    const chunks = await this.memory.getTextChunksByTask(directory, {
+      tasks: [taskId]
+    });
+
+    if (chunks.length === 0) {
+      console.log(`No memory entries found for task: ${taskId}`);
+      return null;
+    }
+
+    const taskChunk = chunks[0];
+    const fullContext = taskChunk.chunks.join("\n\n");
+    
+    const tokens = await this.memory.getTokensByTask(directory, {
+      tasks: [taskId]
+    });
+
+    return {
+      taskId: taskChunk.task,
+      entryCount: taskChunk.chunks.length,
+      tokenCount: tokens[taskId],
+      context: fullContext
+    };
+  }
+
+  async comparePrograms(directory: string, program1: string, program2: string) {
+    const tokens = await this.memory.getTokensByProgram(directory, {
+      programs: [program1, program2]
+    });
+
+    const entries1 = await this.memory.readByProgram(directory, {
+      program: program1,
+      limit: 100
+    });
+
+    const entries2 = await this.memory.readByProgram(directory, {
+      program: program2,
+      limit: 100
+    });
+
+    return {
+      [program1]: {
+        tokens: tokens[program1],
+        runs: entries1.length
+      },
+      [program2]: {
+        tokens: tokens[program2],
+        runs: entries2.length
+      },
+      difference: {
+        tokens: tokens[program1] - tokens[program2],
+        runs: entries1.length - entries2.length
+      }
+    };
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Implementation Details
+
+**Memory Log Format:**
+- Logs are stored as plain text files
+- Entries are aggregated and parsed using `generateAggregation()`
+- Tag format: `[program][task]` for identifying entries
+
+**Token Estimation:**
+- Formula: `floor(0.75 * wordCount)`
+- Words are counted by splitting on whitespace
+- Approximates typical tokenization for LLMs
+
+**Query Performance:**
+- Entire log file is read into memory for queries
+- Use pagination (`limit` and `offset`) for large logs
+- Consider archiving old logs if size grows significantly
+
+**Default Limits:**
+- `recent()`: 50 lines
+- `readByProgram()`: 10 blocks
+- `readByProgramAndTask()`: 10 entries
+- `grep()`: 10 entries
+
+**Deletion Methods:**
+Deletion methods (`deleteByProgram`, `deleteByProgramTask`) are currently disabled in the source code.
+
+---
+
+## Error Handling
+
+Unlike other services, memory methods throw errors rather than returning Result types:
+
+```typescript
+try {
+  const entries = await memoryService.recent(directory, { lines: 20 });
+  console.log(`Retrieved ${entries.length} entries`);
+} catch (error) {
+  console.error(`Failed to read memory: ${error.message}`);
+}
+```
+
+### Common Errors
+
+- Path resolution errors if directory doesn't exist
+- File read errors if log file is corrupted
+- Regular expression syntax errors in `grep()` pattern parameter

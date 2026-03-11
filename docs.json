@@ -72,7 +72,10 @@
               "api/inspector-service",
               "api/filesystem-service",
               "api/auth-service",
-              "api/changes-service"
+              "api/changes-service",
+              "api/skills-service",
+              "api/task-manager-service",
+              "api/memory-service"
             ]
           },
           {

@@ -1,0 +1,363 @@
+---
+title: SkillsService
+description: Service for searching, installing, and removing skills from the skills.sh registry
+---
+
+The `SkillsService` provides methods to search for skills in the skills.sh registry and manage skill installations within agent directories. It integrates with the skills CLI to handle skill lifecycle operations.
+
+## Injection
+
+The service is injectable via dependency injection:
+
+```typescript
+import { inject, injectable } from "tsyringe";
+import { SkillsService } from "@/main/services/skills/skills.service";
+
+@injectable()
+export class MyService {
+  constructor(
+    @inject(SkillsService) private readonly skills: SkillsService
+  ) {}
+}
+```
+
+## Public Methods
+
+### findSkills
+
+Searches the skills.sh registry for skills matching a query string.
+
+<ParamField path="query" type="string" required>
+  The search query to find skills
+</ParamField>
+
+<ParamField path="limit" type="number">
+  Maximum number of results to return (default: 20)
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="SkillSearchResult[]">
+  Array of matching skills from the registry
+</ResponseField>
+
+<ResponseField name="error" type="SkillsError">
+  Error details if the operation failed
+</ResponseField>
+
+**SkillSearchResult Type:**
+```typescript
+interface SkillSearchResult {
+  id: string;
+  skillId: string;
+  name: string;
+  installs: number;
+  source: string;
+}
+```
+
+**Possible Errors:**
+- `ApiError` - Failed to communicate with skills.sh API
+
+<CodeGroup>
+```typescript Example
+const result = await skillsService.findSkills("documentation");
+
+if (result.success) {
+  result.data.forEach(skill => {
+    console.log(`${skill.name} (${skill.skillId})`);
+    console.log(`Installs: ${skill.installs}`);
+    console.log(`Source: ${skill.source}`);
+  });
+} else {
+  console.error(`Search failed: ${result.error.message}`);
+}
+```
+
+```typescript With Limit
+const result = await skillsService.findSkills("typescript", 5);
+
+if (result.success) {
+  console.log(`Found ${result.data.length} skills`);
+}
+```
+
+```typescript Empty Query
+const result = await skillsService.findSkills("");
+// Returns: { success: true, data: [] }
+```
+</CodeGroup>
+
+---
+
+### installSkill
+
+Installs a skill from the registry into an agent directory using the skills CLI.
+
+<ParamField path="options.directory" type="string" required>
+  The directory where the skill will be installed
+</ParamField>
+
+<ParamField path="options.skillId" type="string" required>
+  The ID of the skill to install (from skills.sh)
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="ExecutionResult">
+  Result from the skills CLI execution
+</ResponseField>
+
+<ResponseField name="error" type="FsError | ExecutorError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `PathResolutionError` - Failed to resolve the directory path
+- `ExecutionError` - Skills CLI command failed
+
+<CodeGroup>
+```typescript Example
+const result = await skillsService.installSkill({
+  directory: ".agents/my-agent",
+  skillId: "mintlify/docs"
+});
+
+if (result.success) {
+  console.log("Skill installed successfully");
+  console.log(result.data.stdout);
+} else {
+  console.error(`Installation failed: ${result.error.message}`);
+}
+```
+
+```typescript From Search Results
+const searchResult = await skillsService.findSkills("documentation");
+if (!searchResult.success) return;
+
+const firstSkill = searchResult.data[0];
+const installResult = await skillsService.installSkill({
+  directory: ".agents/docs-agent",
+  skillId: firstSkill.skillId
+});
+
+if (installResult.success) {
+  console.log(`Installed ${firstSkill.name}`);
+}
+```
+</CodeGroup>
+
+---
+
+### removeSkill
+
+Removes an installed skill from an agent directory using the skills CLI.
+
+<ParamField path="options.directory" type="string" required>
+  The directory where the skill is installed
+</ParamField>
+
+<ParamField path="options.skillId" type="string" required>
+  The ID of the skill to remove
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="data" type="ExecutionResult">
+  Result from the skills CLI execution
+</ResponseField>
+
+<ResponseField name="error" type="FsError | ExecutorError">
+  Error details if the operation failed
+</ResponseField>
+
+**Possible Errors:**
+- `PathResolutionError` - Failed to resolve the directory path
+- `ExecutionError` - Skills CLI command failed
+
+<CodeGroup>
+```typescript Example
+const result = await skillsService.removeSkill({
+  directory: ".agents/my-agent",
+  skillId: "mintlify/docs"
+});
+
+if (result.success) {
+  console.log("Skill removed successfully");
+} else {
+  console.error(`Removal failed: ${result.error.message}`);
+}
+```
+</CodeGroup>
+
+---
+
+## RPC Methods
+
+The service exposes RPC methods through `SkillsRpcController` under the `skills` namespace:
+
+### skills.findSkills
+
+```typescript
+interface Request {
+  query: string;
+}
+
+interface Response {
+  id: string;
+  skillId: string;
+  name: string;
+  installs: number;
+  source: string;
+}[]
+```
+
+### skills.installSkill
+
+```typescript
+interface Request {
+  directory: string;
+  skillId: string;
+}
+
+interface Response {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+```
+
+### skills.removeSkill
+
+```typescript
+interface Request {
+  directory: string;
+  skillId: string;
+}
+
+interface Response {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+```
+
+---
+
+## Complete Usage Example
+
+<CodeGroup>
+```typescript Full Workflow
+import { inject, injectable } from "tsyringe";
+import { SkillsService } from "@/main/services/skills/skills.service";
+
+@injectable()
+export class SkillsManager {
+  constructor(
+    @inject(SkillsService) private readonly skills: SkillsService
+  ) {}
+
+  async searchAndInstall(agentDir: string, searchTerm: string) {
+    // Search for skills
+    const searchResult = await this.skills.findSkills(searchTerm, 10);
+    
+    if (!searchResult.success) {
+      throw new Error(`Search failed: ${searchResult.error.message}`);
+    }
+
+    if (searchResult.data.length === 0) {
+      console.log(`No skills found matching "${searchTerm}"`);
+      return;
+    }
+
+    // Display results
+    console.log(`Found ${searchResult.data.length} skills:`);
+    searchResult.data.forEach((skill, i) => {
+      console.log(`${i + 1}. ${skill.name} (${skill.skillId})`);
+      console.log(`   Installs: ${skill.installs}`);
+    });
+
+    // Install the most popular skill
+    const topSkill = searchResult.data.sort((a, b) => 
+      b.installs - a.installs
+    )[0];
+
+    console.log(`\nInstalling ${topSkill.name}...`);
+    const installResult = await this.skills.installSkill({
+      directory: agentDir,
+      skillId: topSkill.skillId
+    });
+
+    if (installResult.success) {
+      console.log(`Successfully installed ${topSkill.name}`);
+      return topSkill;
+    } else {
+      throw new Error(`Installation failed: ${installResult.error.message}`);
+    }
+  }
+
+  async uninstallSkill(agentDir: string, skillId: string) {
+    const result = await this.skills.removeSkill({
+      directory: agentDir,
+      skillId
+    });
+
+    if (result.success) {
+      console.log(`Skill ${skillId} removed successfully`);
+    } else {
+      console.error(`Failed to remove skill: ${result.error.message}`);
+    }
+
+    return result.success;
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Implementation Details
+
+**Skills API Base URL:**
+```typescript
+const SKILLS_API_BASE = "https://skills.sh";
+```
+
+**CLI Commands:**
+- Install: `npx -y skills add --skill "<skillId>" --agent opencode -y`
+- Remove: `npx -y skills remove --skill "<skillId>" --agent opencode -y`
+
+**Search Behavior:**
+- Empty queries return an empty array (success case)
+- Query is trimmed before processing
+- API endpoint: `https://skills.sh/api/search?q=<query>&limit=<limit>`
+
+---
+
+## Error Handling
+
+All methods return a `Result<T, E>` type that must be checked:
+
+```typescript
+const result = await skillsService.findSkills("typescript");
+
+if (result.success) {
+  // Use result.data
+  const skills = result.data;
+} else {
+  // Handle result.error
+  console.error(`Error: ${result.error.message}`);
+}
+```
+
+### Common Error Codes
+
+- `ApiError` - Skills.sh API is unreachable or returned an error
+- `PathResolutionError` - Cannot resolve the target directory
+- `ExecutionError` - Skills CLI command failed during execution
