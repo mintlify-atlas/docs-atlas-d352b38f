@@ -1,0 +1,99 @@
+{
+  "projectType": "saas",
+  "projectName": "Arkitec",
+  "projectDescription": "A desktop application for orchestrating and monitoring agent-driven workspaces with real-time file system synchronization.",
+  "theme": "aspen",
+  "primaryColor": "#2563eb",
+  "lightColor": "#3b82f6",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/agents",
+              "concepts/projects",
+              "concepts/workspaces",
+              "concepts/change-bus"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/authentication",
+              "features/agent-management",
+              "features/project-registry",
+              "features/file-system",
+              "features/task-scheduling"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/architecture",
+              "development/main-process",
+              "development/renderer-process",
+              "development/rpc-communication"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Services",
+            "pages": [
+              "api/agent-service",
+              "api/inspector-service",
+              "api/filesystem-service",
+              "api/auth-service",
+              "api/changes-service"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/agent-card",
+              "api/types/project-config",
+              "api/types/workspace-events"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time file system watching and change propagation",
+    "Agent card management with skill synchronization",
+    "Project registry with cron-based task scheduling",
+    "Authentication flow with OAuth integration",
+    "Organization visualization and hierarchy management",
+    "Electron-based desktop application with IPC communication"
+  ],
+  "publicApiSurface": [
+    "AgentService.createCard",
+    "AgentService.updateCard",
+    "AgentService.syncSkills",
+    "InspectorService.scanAndRegister",
+    "InspectorService.registerProject",
+    "InspectorService.getOrganization",
+    "FileSystemService.openFolder",
+    "FileSystemService.getTree",
+    "AuthService.setupMain",
+    "ChangeBusService.publish",
+    "ChangeBusService.subscribe"
+  ]
+}
